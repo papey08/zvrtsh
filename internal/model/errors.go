@@ -15,4 +15,5 @@ var (
 	ErrUserUnauthorized = errors.New("user authorization error")
 	ErrWrongPassword    = errors.New("wrong password of user with required name")
 	ErrNoInviteCode     = errors.New("given invite code not exists")
+	ErrServer           = errors.New("sorry something wrong with the server")
 )

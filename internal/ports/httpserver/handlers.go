@@ -21,13 +21,13 @@ func createSession(a app.App) gin.HandlerFunc {
 		sessionId, err := a.CreateSession(c, req.Id01, req.Id02, req.StepsAmount)
 		switch {
 		case errors.Is(err, model.ErrIdOverflow):
-			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrIdOverflow))
 		case errors.Is(err, model.ErrValidationError):
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(createSessionData{sessionId}))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -49,17 +49,17 @@ func makeQuestion(a app.App) gin.HandlerFunc {
 		err = a.MakeQuestion(c, req.SessionId, userId, req.StepIdx, req.HiddenQuestion, req.OpenQuestion)
 		switch {
 		case errors.Is(err, model.ErrValidationError):
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case errors.Is(err, model.ErrNoSession):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
 		case errors.Is(err, model.ErrUserForbidden):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
 		case errors.Is(err, model.ErrStepForbidden):
-			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrStepForbidden))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(nil))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -81,17 +81,17 @@ func makeAnswer(a app.App) gin.HandlerFunc {
 		err = a.MakeAnswer(c, req.SessionId, userId, req.StepIdx, req.Answer)
 		switch {
 		case errors.Is(err, model.ErrValidationError):
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case errors.Is(err, model.ErrNoSession):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
 		case errors.Is(err, model.ErrUserForbidden):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
 		case errors.Is(err, model.ErrStepForbidden):
-			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrStepForbidden))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(nil))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -121,17 +121,17 @@ func getQuestion(a app.App) gin.HandlerFunc {
 		openQuestion, err := a.GetQuestion(c, sessionId, userId, stepIdx)
 		switch {
 		case errors.Is(err, model.ErrValidationError):
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case errors.Is(err, model.ErrNoSession):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
 		case errors.Is(err, model.ErrUserForbidden):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
 		case errors.Is(err, model.ErrStepForbidden):
-			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrStepForbidden))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(getQuestionData{openQuestion}))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -155,15 +155,15 @@ func getResults(a app.App) gin.HandlerFunc {
 		session, err := a.GetResults(c, uint64(sessionId), uint64(userId))
 		switch {
 		case errors.Is(err, model.ErrNoSession):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
 		case errors.Is(err, model.ErrUserForbidden):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
 		case errors.Is(err, model.ErrSessionUndone):
-			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrSessionUndone))
 		case err == nil:
 			c.JSON(http.StatusOK, successSessionResponse(session))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -179,11 +179,11 @@ func registerUser(a app.App) gin.HandlerFunc {
 		user, err := a.RegisterUser(c, req.Name, req.Password)
 		switch {
 		case errors.Is(err, model.ErrCollision):
-			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrCollision))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(userData{user.Name, user.SecretCode}))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -200,15 +200,15 @@ func getUserInviteCode(a app.App) gin.HandlerFunc {
 		inviteCode, err := a.GetUserInviteCode(c, name, userId)
 		switch {
 		case errors.Is(err, model.ErrUserUnauthorized):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserUnauthorized))
 		case errors.Is(err, model.ErrNoUser):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoUser))
 		case errors.Is(err, model.ErrCollision):
-			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrCollision))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(userInviteCodeData{inviteCode}))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
@@ -225,13 +225,13 @@ func getUserSecretCode(a app.App) gin.HandlerFunc {
 		secretCode, err := a.GetUserSecretCode(c, name, req.Password)
 		switch {
 		case errors.Is(err, model.ErrWrongPassword):
-			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrWrongPassword))
 		case errors.Is(err, model.ErrNoUser):
-			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoUser))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(userSecretCodeData{secretCode}))
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(err))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
 	}
 }
