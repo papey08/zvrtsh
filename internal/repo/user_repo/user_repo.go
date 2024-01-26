@@ -16,7 +16,7 @@ func (u *userRepoImpl) CreateUser(_ context.Context, name string, encodedPasswor
 	defer u.mu.Unlock()
 
 	if _, ok := u.users[name]; ok {
-		return model.User{}, model.ErrCollision
+		return model.User{}, model.ErrUserExists
 	}
 
 	newUser := model.User{

@@ -14,6 +14,6 @@ func appRouter(r *gin.RouterGroup, a app.App) {
 	r.GET("/session", getResults(a))
 
 	r.POST("/user", registerUser(a))
-	r.GET("/user/:name/invite", getUserInviteCode(a))
+	r.GET("/invite/:name", getUserInviteCode(a))
 	r.GET("/user/:name", getUserSecretCode(a))
 }

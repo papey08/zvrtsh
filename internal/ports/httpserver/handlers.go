@@ -20,8 +20,10 @@ func createSession(a app.App) gin.HandlerFunc {
 
 		sessionId, err := a.CreateSession(c, req.Id01, req.Id02, req.StepsAmount)
 		switch {
-		case errors.Is(err, model.ErrIdOverflow):
-			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrIdOverflow))
+		case errors.Is(err, model.ErrNoInviteCode):
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse(model.ErrNoInviteCode))
+		case errors.Is(err, model.ErrCollision):
+			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrCollision))
 		case errors.Is(err, model.ErrValidationError):
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case err == nil:
@@ -159,7 +161,7 @@ func getResults(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrUserForbidden):
 			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
 		case errors.Is(err, model.ErrSessionUndone):
-			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrSessionUndone))
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrSessionUndone))
 		case err == nil:
 			c.JSON(http.StatusOK, successSessionResponse(session))
 		default:
@@ -178,8 +180,8 @@ func registerUser(a app.App) gin.HandlerFunc {
 
 		user, err := a.RegisterUser(c, req.Name, req.Password)
 		switch {
-		case errors.Is(err, model.ErrCollision):
-			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrCollision))
+		case errors.Is(err, model.ErrUserExists):
+			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrUserExists))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(userData{user.Name, user.SecretCode}))
 		default:

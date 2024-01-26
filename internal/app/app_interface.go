@@ -25,10 +25,9 @@ type sessionApp interface {
 
 func newSessionApp(invites inviterepo.InviteRepo) sessionApp {
 	return &sessionAppImpl{
-		mu:         &sync.Mutex{},
-		sessions:   make(map[uint64]*model.Session),
-		nextFreeId: 0,
-		invites:    invites,
+		mu:       &sync.Mutex{},
+		sessions: make(map[uint64]*model.Session),
+		invites:  invites,
 	}
 }
 
