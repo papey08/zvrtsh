@@ -2,16 +2,16 @@ package app
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"zvrtsh/internal/model"
 	inviterepo "zvrtsh/internal/repo/invite_repo"
 )
 
 type sessionAppImpl struct {
-	mu         *sync.Mutex
-	sessions   map[uint64]*model.Session
-	nextFreeId uint64
-	invites    inviterepo.InviteRepo
+	mu       *sync.Mutex
+	sessions map[uint64]*model.Session
+	invites  inviterepo.InviteRepo
 }
 
 func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code02 string, stepsAmount int) (uint64, error) {
@@ -28,17 +28,17 @@ func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code0
 		return 0, err
 	}
 
-	a.nextFreeId++
-	if a.nextFreeId == 0 {
-		return 0, model.ErrIdOverflow
+	sessionId := generateSessionId()
+	if _, ok := a.sessions[sessionId]; ok {
+		return 0, model.ErrCollision
 	}
 
 	if stepsAmount <= 0 {
 		return 0, model.ErrValidationError
 	}
 
-	a.sessions[a.nextFreeId] = &model.Session{
-		Id: a.nextFreeId,
+	a.sessions[sessionId] = &model.Session{
+		Id: sessionId,
 		Sheets: [2]model.Sheet{
 			{
 				OwnerId: id01,
@@ -51,7 +51,11 @@ func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code0
 		},
 	}
 
-	return a.nextFreeId, nil
+	return sessionId, nil
+}
+
+func generateSessionId() uint64 {
+	return rand.Uint64()
 }
 
 func (a *sessionAppImpl) MakeQuestion(_ context.Context, sessionId uint64, userId uint64, stepIdx int, hiddenQuestion string, openQuestion string) error {
