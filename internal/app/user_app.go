@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math/rand"
+	"strings"
+	"unicode"
 	"zvrtsh/internal/model"
 	inviterepo "zvrtsh/internal/repo/invite_repo"
 	userrepo "zvrtsh/internal/repo/user_repo"
@@ -24,6 +26,38 @@ func (u *userAppImpl) RegisterUser(ctx context.Context, name string, password st
 	secretCode := generateSecretCode()
 
 	return u.users.CreateUser(ctx, name, encodedPassword, secretCode)
+}
+
+func isValidName(name string) bool {
+	// validate name length
+	if 4 > len(name) || len(name) > 30 {
+		return false
+	}
+
+	// check if name contains only latin letters, digits and _
+	for _, r := range name {
+		if !unicode.In(r, unicode.Latin, unicode.Digit) && r != '_' {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isValidPassword(password string) bool {
+	// validate password length
+	if 4 > len(password) || len(password) > 30 {
+		return false
+	}
+
+	// check if password contains only allowed symbols
+	for _, r := range password {
+		if !unicode.In(r, unicode.Latin, unicode.Digit) && !strings.ContainsRune("!@#$%^&*()-_=+[]{}\\|/'\";:,.<>?", r) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func generateSecretCode() uint64 {

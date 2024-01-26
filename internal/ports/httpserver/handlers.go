@@ -182,6 +182,8 @@ func registerUser(a app.App) gin.HandlerFunc {
 		switch {
 		case errors.Is(err, model.ErrUserExists):
 			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrUserExists))
+		case errors.Is(err, model.ErrValidationError):
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case err == nil:
 			c.JSON(http.StatusOK, successResponse(userData{user.Name, user.SecretCode}))
 		default:
