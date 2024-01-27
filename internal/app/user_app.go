@@ -25,6 +25,10 @@ func (u *userAppImpl) RegisterUser(ctx context.Context, name string, password st
 	encodedPassword := getHashedString(password)
 	secretCode := generateSecretCode()
 
+	if !isValidName(name) || !isValidPassword(password) {
+		return model.User{}, model.ErrValidationError
+	}
+
 	return u.users.CreateUser(ctx, name, encodedPassword, secretCode)
 }
 
