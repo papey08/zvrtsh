@@ -2,56 +2,56 @@ package httpserver
 
 import "zvrtsh/internal/model"
 
-type createSessionData struct {
+type CreateSessionData struct {
 	SessionId uint64 `json:"session_id"`
 }
 
-type getQuestionData struct {
+type GetQuestionData struct {
 	OpenQuestion string `json:"open_question"`
 }
 
-type response struct {
+type Response struct {
 	Data any     `json:"data"`
 	Err  *string `json:"error"`
 }
 
-func successResponse(data any) response {
-	return response{
+func successResponse(data any) Response {
+	return Response{
 		Data: data,
 		Err:  nil,
 	}
 }
 
-func errorResponse(err error) response {
+func errorResponse(err error) Response {
 	errStr := err.Error()
-	return response{
+	return Response{
 		Data: nil,
 		Err:  &errStr,
 	}
 }
 
-type getSessionData struct {
+type GetSessionData struct {
 	Id     uint64   `json:"id"`
-	Sheets [2]sheet `json:"sheets"`
+	Sheets [2]Sheet `json:"sheets"`
 }
 
-type sheet struct {
+type Sheet struct {
 	OwnerId uint64 `json:"owner_id"`
-	Steps   []step `json:"steps"`
+	Steps   []Step `json:"steps"`
 }
 
-type step struct {
+type Step struct {
 	HiddenQuestion string `json:"hidden_question"`
 	OpenQuestion   string `json:"open_question"`
 	Answer         string `json:"answer"`
 }
 
-func successSessionResponse(s model.Session) response {
-	var data getSessionData
+func successSessionResponse(s model.Session) Response {
+	var data GetSessionData
 	data.Id = s.Id
 	for i := 0; i < 2; i++ {
 		data.Sheets[i].OwnerId = s.Sheets[i].OwnerId
-		data.Sheets[i].Steps = make([]step, len(s.Sheets[i].Steps))
+		data.Sheets[i].Steps = make([]Step, len(s.Sheets[i].Steps))
 		for j, step := range s.Sheets[i].Steps {
 			data.Sheets[i].Steps[j].HiddenQuestion = step.HiddenQuestion
 			data.Sheets[i].Steps[j].OpenQuestion = step.OpenQuestion
@@ -61,15 +61,15 @@ func successSessionResponse(s model.Session) response {
 	return successResponse(data)
 }
 
-type userData struct {
+type UserData struct {
 	Name       string `json:"name"`
 	SecretCode uint64 `json:"access_token"`
 }
 
-type userInviteCodeData struct {
+type UserInviteCodeData struct {
 	InviteCode string `json:"invite_code"`
 }
 
-type userSecretCodeData struct {
+type UserSecretCodeData struct {
 	SecretCode uint64 `json:"secret_code"`
 }

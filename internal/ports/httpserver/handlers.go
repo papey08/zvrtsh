@@ -12,7 +12,7 @@ import (
 
 func createSession(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req createSessionRequest
+		var req CreateSessionRequest
 		if err := c.BindJSON(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
 			return
@@ -27,7 +27,7 @@ func createSession(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrValidationError):
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case err == nil:
-			c.JSON(http.StatusOK, successResponse(createSessionData{sessionId}))
+			c.JSON(http.StatusOK, successResponse(CreateSessionData{sessionId}))
 		default:
 			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
@@ -36,7 +36,7 @@ func createSession(a app.App) gin.HandlerFunc {
 
 func makeQuestion(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req makeQuestionRequest
+		var req MakeQuestionRequest
 		if err := c.BindJSON(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
 			return
@@ -68,7 +68,7 @@ func makeQuestion(a app.App) gin.HandlerFunc {
 
 func makeAnswer(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req makeAnswerRequest
+		var req MakeAnswerRequest
 		if err := c.BindJSON(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
 			return
@@ -131,7 +131,7 @@ func getQuestion(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrStepForbidden):
 			c.AbortWithStatusJSON(http.StatusConflict, errorResponse(model.ErrStepForbidden))
 		case err == nil:
-			c.JSON(http.StatusOK, successResponse(getQuestionData{openQuestion}))
+			c.JSON(http.StatusOK, successResponse(GetQuestionData{openQuestion}))
 		default:
 			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
@@ -172,7 +172,7 @@ func getResults(a app.App) gin.HandlerFunc {
 
 func registerUser(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req registerUserRequest
+		var req RegisterUserRequest
 		if err := c.BindJSON(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, model.ErrInvalidInput)
 			return
@@ -185,7 +185,7 @@ func registerUser(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrValidationError):
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
 		case err == nil:
-			c.JSON(http.StatusOK, successResponse(userData{user.Name, user.SecretCode}))
+			c.JSON(http.StatusOK, successResponse(UserData{user.Name, user.SecretCode}))
 		default:
 			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
@@ -210,7 +210,7 @@ func getUserInviteCode(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrCollision):
 			c.AbortWithStatusJSON(http.StatusInsufficientStorage, errorResponse(model.ErrCollision))
 		case err == nil:
-			c.JSON(http.StatusOK, successResponse(userInviteCodeData{inviteCode}))
+			c.JSON(http.StatusOK, successResponse(UserInviteCodeData{inviteCode}))
 		default:
 			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
@@ -220,7 +220,7 @@ func getUserInviteCode(a app.App) gin.HandlerFunc {
 func getUserSecretCode(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("name")
-		var req getUserSecretCodeRequest
+		var req GetUserSecretCodeRequest
 		if err := c.BindJSON(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
 			return
@@ -233,7 +233,7 @@ func getUserSecretCode(a app.App) gin.HandlerFunc {
 		case errors.Is(err, model.ErrNoUser):
 			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoUser))
 		case err == nil:
-			c.JSON(http.StatusOK, successResponse(userSecretCodeData{secretCode}))
+			c.JSON(http.StatusOK, successResponse(UserSecretCodeData{secretCode}))
 		default:
 			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
 		}
