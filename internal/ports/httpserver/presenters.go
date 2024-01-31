@@ -7,14 +7,14 @@ type CreateSessionRequest struct {
 }
 
 type MakeQuestionRequest struct {
-	SessionId      uint64 `json:"session_id"`
+	SessionId      string `json:"session_id"`
 	StepIdx        int    `json:"step_index"`
 	HiddenQuestion string `json:"hidden_question"`
 	OpenQuestion   string `json:"open_question"`
 }
 
 type MakeAnswerRequest struct {
-	SessionId uint64 `json:"session_id"`
+	SessionId string `json:"session_id"`
 	StepIdx   int    `json:"step_index"`
 	Answer    string `json:"answer"`
 }

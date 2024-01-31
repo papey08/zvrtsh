@@ -3,11 +3,11 @@ package httpserver
 import "zvrtsh/internal/model"
 
 type CreateSessionData struct {
-	SessionId uint64 `json:"session_id"`
+	SessionId string `json:"session_id"`
 }
 
 type GetStepsAmountData struct {
-	SessionId   uint64 `json:"session_id"`
+	SessionId   string `json:"session_id"`
 	StepsAmount int    `json:"steps_amount"`
 }
 
@@ -36,12 +36,12 @@ func errorResponse(err error) Response {
 }
 
 type GetSessionData struct {
-	Id     uint64   `json:"id"`
+	Id     string   `json:"id"`
 	Sheets [2]Sheet `json:"sheets"`
 }
 
 type Sheet struct {
-	OwnerId uint64 `json:"owner_id"`
+	OwnerId string `json:"owner_id"`
 	Steps   []Step `json:"steps"`
 }
 
@@ -68,7 +68,7 @@ func successSessionResponse(s model.Session) Response {
 
 type UserData struct {
 	Name       string `json:"name"`
-	SecretCode uint64 `json:"access_token"`
+	SecretCode string `json:"secret_code"`
 }
 
 type UserInviteCodeData struct {
@@ -76,5 +76,5 @@ type UserInviteCodeData struct {
 }
 
 type UserSecretCodeData struct {
-	SecretCode uint64 `json:"secret_code"`
+	SecretCode string `json:"secret_code"`
 }

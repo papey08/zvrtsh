@@ -36,19 +36,8 @@ func createSession(a app.App) gin.HandlerFunc {
 
 func getSession(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		sessionIdStr := c.Query("session_id")
-		userIdStr := c.GetHeader("user_id")
-
-		sessionId, err := strconv.ParseUint(sessionIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
-		userId, err := strconv.ParseUint(userIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
+		sessionId := c.Query("session_id")
+		userId := c.GetHeader("user_id")
 
 		session, err := a.GetSession(c, sessionId, userId)
 		switch {
@@ -75,13 +64,9 @@ func makeQuestion(a app.App) gin.HandlerFunc {
 			return
 		}
 
-		userId, err := strconv.ParseUint(c.GetHeader("user_id"), 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
+		userId := c.GetHeader("user_id")
 
-		err = a.MakeQuestion(c, req.SessionId, userId, req.StepIdx, req.HiddenQuestion, req.OpenQuestion)
+		err := a.MakeQuestion(c, req.SessionId, userId, req.StepIdx, req.HiddenQuestion, req.OpenQuestion)
 		switch {
 		case errors.Is(err, model.ErrValidationError):
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
@@ -107,13 +92,9 @@ func makeAnswer(a app.App) gin.HandlerFunc {
 			return
 		}
 
-		userId, err := strconv.ParseUint(c.GetHeader("user_id"), 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
+		userId := c.GetHeader("user_id")
 
-		err = a.MakeAnswer(c, req.SessionId, userId, req.StepIdx, req.Answer)
+		err := a.MakeAnswer(c, req.SessionId, userId, req.StepIdx, req.Answer)
 		switch {
 		case errors.Is(err, model.ErrValidationError):
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrValidationError))
@@ -133,20 +114,10 @@ func makeAnswer(a app.App) gin.HandlerFunc {
 
 func getQuestion(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		sessionIdStr := c.Query("session_id")
-		userIdStr := c.GetHeader("user_id")
+		sessionId := c.Query("session_id")
+		userId := c.GetHeader("user_id")
 		stepIdxStr := c.Query("step_idx")
 
-		sessionId, err := strconv.ParseUint(sessionIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
-		userId, err := strconv.ParseUint(userIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
 		stepIdx, err := strconv.Atoi(stepIdxStr)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
@@ -173,21 +144,10 @@ func getQuestion(a app.App) gin.HandlerFunc {
 
 func getResults(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		sessionIdStr := c.Query("session_id")
-		userIdStr := c.GetHeader("user_id")
+		sessionId := c.Query("session_id")
+		userId := c.GetHeader("user_id")
 
-		sessionId, err := strconv.ParseUint(sessionIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
-		userId, err := strconv.ParseUint(userIdStr, 10, 64)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
-
-		session, err := a.GetResults(c, uint64(sessionId), uint64(userId))
+		session, err := a.GetResults(c, sessionId, userId)
 		switch {
 		case errors.Is(err, model.ErrNoSession):
 			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
@@ -228,11 +188,7 @@ func registerUser(a app.App) gin.HandlerFunc {
 func getUserInviteCode(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("name")
-		userId, err := strconv.ParseUint(c.GetHeader("user_id"), 10, 64)
-		if err != nil || name == "" {
-			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
-			return
-		}
+		userId := c.GetHeader("user_id")
 
 		inviteCode, err := a.GetUserInviteCode(c, name, userId)
 		switch {

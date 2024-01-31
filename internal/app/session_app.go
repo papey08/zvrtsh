@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"math/rand"
+	"github.com/google/uuid"
 	"sync"
 	"zvrtsh/internal/model"
 	inviterepo "zvrtsh/internal/repo/invite_repo"
@@ -10,31 +10,31 @@ import (
 
 type sessionAppImpl struct {
 	mu       *sync.Mutex
-	sessions map[uint64]*model.Session
+	sessions map[string]*model.Session
 	invites  inviterepo.InviteRepo
 }
 
-func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code02 string, stepsAmount int) (uint64, error) {
+func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code02 string, stepsAmount int) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	id01, err := a.invites.GetId(ctx, code01)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	id02, err := a.invites.GetId(ctx, code02)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	sessionId := generateSessionId()
 	if _, ok := a.sessions[sessionId]; ok {
-		return 0, model.ErrCollision
+		return "", model.ErrCollision
 	}
 
 	if stepsAmount <= 0 {
-		return 0, model.ErrValidationError
+		return "", model.ErrValidationError
 	}
 
 	a.sessions[sessionId] = &model.Session{
@@ -54,7 +54,7 @@ func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code0
 	return sessionId, nil
 }
 
-func (a *sessionAppImpl) GetSession(_ context.Context, sessionId uint64, userId uint64) (model.Session, error) {
+func (a *sessionAppImpl) GetSession(_ context.Context, sessionId string, userId string) (model.Session, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -67,11 +67,11 @@ func (a *sessionAppImpl) GetSession(_ context.Context, sessionId uint64, userId 
 	}
 }
 
-func generateSessionId() uint64 {
-	return rand.Uint64()
+func generateSessionId() string {
+	return uuid.New().String()
 }
 
-func (a *sessionAppImpl) MakeQuestion(_ context.Context, sessionId uint64, userId uint64, stepIdx int, hiddenQuestion string, openQuestion string) error {
+func (a *sessionAppImpl) MakeQuestion(_ context.Context, sessionId string, userId string, stepIdx int, hiddenQuestion string, openQuestion string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -116,7 +116,7 @@ func (a *sessionAppImpl) MakeQuestion(_ context.Context, sessionId uint64, userI
 	return nil
 }
 
-func (a *sessionAppImpl) MakeAnswer(_ context.Context, sessionId uint64, userId uint64, stepIdx int, answer string) error {
+func (a *sessionAppImpl) MakeAnswer(_ context.Context, sessionId string, userId string, stepIdx int, answer string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -157,7 +157,7 @@ func (a *sessionAppImpl) MakeAnswer(_ context.Context, sessionId uint64, userId 
 	return nil
 }
 
-func (a *sessionAppImpl) GetQuestion(_ context.Context, sessionId uint64, userId uint64, stepIdx int) (string, error) {
+func (a *sessionAppImpl) GetQuestion(_ context.Context, sessionId string, userId string, stepIdx int) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -197,7 +197,7 @@ func (a *sessionAppImpl) GetQuestion(_ context.Context, sessionId uint64, userId
 	return sheet.Steps[stepIdx].OpenQuestion, nil
 }
 
-func (a *sessionAppImpl) GetResults(_ context.Context, sessionId uint64, userId uint64) (model.Session, error) {
+func (a *sessionAppImpl) GetResults(_ context.Context, sessionId string, userId string) (model.Session, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

@@ -11,7 +11,7 @@ type UserRepoImpl struct {
 	Users map[string]*model.User
 }
 
-func (u *UserRepoImpl) CreateUser(_ context.Context, name string, encodedPassword string, SecretCode uint64) (model.User, error) {
+func (u *UserRepoImpl) CreateUser(_ context.Context, name string, encodedPassword string, SecretCode string) (model.User, error) {
 	u.Mu.Lock()
 	defer u.Mu.Unlock()
 
@@ -40,3 +40,5 @@ func (u *UserRepoImpl) GetUser(_ context.Context, name string) (model.User, erro
 
 	return *user, nil
 }
+
+func (u *UserRepoImpl) Close() {}

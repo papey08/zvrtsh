@@ -12,7 +12,7 @@ func appRouter(r *gin.RouterGroup, a app.App) {
 	r.POST("/question", makeQuestion(a))
 	r.POST("/answer", makeAnswer(a))
 	r.GET("/question", getQuestion(a))
-	r.GET("/session", getResults(a))
+	r.GET("/results", getResults(a))
 
 	r.POST("/user", registerUser(a))
 	r.GET("/invite/:name", getUserInviteCode(a))

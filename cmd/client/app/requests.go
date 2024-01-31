@@ -33,7 +33,7 @@ func (a *App) RegisterUser(_ context.Context, name string, password string) erro
 
 	if respData.Data != nil {
 		a.name = name
-		a.secretCode = respData.Data.(httpserver.UserData).SecretCode
+		a.secretCode = getSecretCodeFromData(respData.Data)
 		return nil
 	} else if respData.Err != nil {
 		return errors.New(*respData.Err)
@@ -46,7 +46,7 @@ func (a *App) LoginUser(_ context.Context, name string, password string) error {
 	reqBody, _ := json.Marshal(httpserver.GetUserSecretCodeRequest{
 		Password: password,
 	})
-	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%sinvite/%s", a.baseUrl, name), bytes.NewReader(reqBody))
+	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%suser/%s", a.baseUrl, name), bytes.NewReader(reqBody))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -55,7 +55,7 @@ func (a *App) LoginUser(_ context.Context, name string, password string) error {
 
 	if respData.Data != nil {
 		a.name = name
-		a.secretCode = respData.Data.(httpserver.UserSecretCodeData).SecretCode
+		a.secretCode = getSecretCodeFromData(respData.Data)
 		return nil
 	} else if respData.Err != nil {
 		return errors.New(*respData.Err)
@@ -66,7 +66,7 @@ func (a *App) LoginUser(_ context.Context, name string, password string) error {
 
 func (a *App) GetUserInviteCode(_ context.Context) (string, error) {
 	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%sinvite/%s", a.baseUrl, a.name), nil)
-	req.Header.Set("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Set("user_id", fmt.Sprintf("%s", a.secretCode))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -74,7 +74,7 @@ func (a *App) GetUserInviteCode(_ context.Context) (string, error) {
 	}
 
 	if respData.Data != nil {
-		return respData.Data.(httpserver.UserInviteCodeData).InviteCode, nil
+		return getInviteCodeFromData(respData.Data), nil
 	} else if respData.Err != nil {
 		return "", errors.New(*respData.Err)
 	} else {
@@ -94,7 +94,7 @@ func (a *App) GetUserSecretCode(_ context.Context, password string) error {
 	}
 
 	if respData.Data != nil {
-		a.secretCode = respData.Data.(httpserver.UserSecretCodeData).SecretCode
+		a.secretCode = getSecretCodeFromData(respData.Data)
 		return nil
 	} else if respData.Err != nil {
 		return errors.New(*respData.Err)
@@ -103,14 +103,14 @@ func (a *App) GetUserSecretCode(_ context.Context, password string) error {
 	}
 }
 
-func (a *App) CreateSession(ctx context.Context, code string, stepsAmount int) (uint64, error) {
-	if a.secretCode == 0 {
-		return 0, ErrUserNotAuthorized
+func (a *App) CreateSession(ctx context.Context, code string, stepsAmount int) (string, error) {
+	if a.secretCode == "" {
+		return "", ErrUserNotAuthorized
 	}
 
 	ownerCode, err := a.GetUserInviteCode(ctx)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	reqBody, _ := json.Marshal(httpserver.CreateSessionRequest{
@@ -123,23 +123,23 @@ func (a *App) CreateSession(ctx context.Context, code string, stepsAmount int) (
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	if respData.Data != nil {
-		return respData.Data.(httpserver.CreateSessionData).SessionId, nil
+		return getSessionIdFromData(respData.Data), nil
 	} else if respData.Err != nil {
-		return 0, errors.New(*respData.Err)
+		return "", errors.New(*respData.Err)
 	} else {
-		return 0, ErrClient
+		return "", ErrClient
 	}
 }
 
-func (a *App) GetSession(_ context.Context, sessionId uint64) (int, error) {
+func (a *App) GetSession(_ context.Context, sessionId string) (int, error) {
 	req, _ := http.NewRequest(http.MethodGet, a.baseUrl+"session", nil)
-	req.Header.Add("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Add("user_id", fmt.Sprintf("%s", a.secretCode))
 	q := req.URL.Query()
-	q.Add("session_id", fmt.Sprintf("%d", sessionId))
+	q.Add("session_id", fmt.Sprintf("%s", sessionId))
 	req.URL.RawQuery = q.Encode()
 
 	respData, err := a.makeRequest(req)
@@ -148,7 +148,7 @@ func (a *App) GetSession(_ context.Context, sessionId uint64) (int, error) {
 	}
 
 	if respData.Data != nil {
-		return respData.Data.(httpserver.GetStepsAmountData).StepsAmount, nil
+		return getStepsAmountFromData(respData.Data), nil
 	} else if respData.Err != nil {
 		return 0, errors.New(*respData.Err)
 	} else {
@@ -157,10 +157,10 @@ func (a *App) GetSession(_ context.Context, sessionId uint64) (int, error) {
 }
 
 func (a *App) MakeQuestion(_ context.Context, stepIdx int, hiddenQuestion string, openQuestion string) error {
-	if a.secretCode == 0 {
+	if a.secretCode == "" {
 		return ErrUserNotAuthorized
 	}
-	if a.SessionCode == 0 {
+	if a.SessionCode == "" {
 		return ErrNoSessionCode
 	}
 
@@ -172,7 +172,7 @@ func (a *App) MakeQuestion(_ context.Context, stepIdx int, hiddenQuestion string
 	})
 
 	req, _ := http.NewRequest(http.MethodPost, a.baseUrl+"question", bytes.NewReader(reqBody))
-	req.Header.Add("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Add("user_id", fmt.Sprintf("%s", a.secretCode))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -187,10 +187,10 @@ func (a *App) MakeQuestion(_ context.Context, stepIdx int, hiddenQuestion string
 }
 
 func (a *App) MakeAnswer(_ context.Context, stepIdx int, answer string) error {
-	if a.secretCode == 0 {
+	if a.secretCode == "" {
 		return ErrUserNotAuthorized
 	}
-	if a.SessionCode == 0 {
+	if a.SessionCode == "" {
 		return ErrNoSessionCode
 	}
 
@@ -201,7 +201,7 @@ func (a *App) MakeAnswer(_ context.Context, stepIdx int, answer string) error {
 	})
 
 	req, _ := http.NewRequest(http.MethodPost, a.baseUrl+"answer", bytes.NewReader(reqBody))
-	req.Header.Add("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Add("user_id", fmt.Sprintf("%s", a.secretCode))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -216,19 +216,19 @@ func (a *App) MakeAnswer(_ context.Context, stepIdx int, answer string) error {
 }
 
 func (a *App) GetQuestion(_ context.Context, stepIdx int) (string, error) {
-	if a.secretCode == 0 {
+	if a.secretCode == "" {
 		return "", ErrUserNotAuthorized
 	}
-	if a.SessionCode == 0 {
+	if a.SessionCode == "" {
 		return "", ErrNoSessionCode
 	}
 
 	req, _ := http.NewRequest(http.MethodGet, a.baseUrl+"question", nil)
 	q := req.URL.Query()
-	q.Add("session_id", fmt.Sprintf("%d", a.SessionCode))
+	q.Add("session_id", fmt.Sprintf("%s", a.SessionCode))
 	q.Add("step_idx", strconv.Itoa(stepIdx))
 	req.URL.RawQuery = q.Encode()
-	req.Header.Add("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Add("user_id", fmt.Sprintf("%s", a.secretCode))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -236,7 +236,7 @@ func (a *App) GetQuestion(_ context.Context, stepIdx int) (string, error) {
 	}
 
 	if respData.Data != nil {
-		return respData.Data.(httpserver.GetQuestionData).OpenQuestion, nil
+		return getOpenQuestionFromData(respData.Data), nil
 	} else if respData.Err != nil {
 		return "", errors.New(*respData.Err)
 	} else {
@@ -245,18 +245,18 @@ func (a *App) GetQuestion(_ context.Context, stepIdx int) (string, error) {
 }
 
 func (a *App) GetResults(_ context.Context) (httpserver.GetSessionData, error) {
-	if a.secretCode == 0 {
+	if a.secretCode == "" {
 		return httpserver.GetSessionData{}, ErrUserNotAuthorized
 	}
-	if a.SessionCode == 0 {
+	if a.SessionCode == "" {
 		return httpserver.GetSessionData{}, ErrNoSessionCode
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, a.baseUrl+"session", nil)
+	req, _ := http.NewRequest(http.MethodGet, a.baseUrl+"results", nil)
 	q := req.URL.Query()
-	q.Add("session_id", fmt.Sprintf("%d", a.SessionCode))
+	q.Add("session_id", fmt.Sprintf("%s", a.SessionCode))
 	req.URL.RawQuery = q.Encode()
-	req.Header.Add("user_id", fmt.Sprintf("%d", a.secretCode))
+	req.Header.Add("user_id", fmt.Sprintf("%s", a.secretCode))
 
 	respData, err := a.makeRequest(req)
 	if err != nil {
@@ -264,7 +264,7 @@ func (a *App) GetResults(_ context.Context) (httpserver.GetSessionData, error) {
 	}
 
 	if respData.Data != nil {
-		return respData.Data.(httpserver.GetSessionData), nil
+		return getResultsFromData(respData.Data), nil
 	} else if respData.Err != nil {
 		return httpserver.GetSessionData{}, errors.New(*respData.Err)
 	} else {
@@ -283,7 +283,7 @@ func (a *App) makeRequest(req *http.Request) (httpserver.Response, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	var respData httpserver.Response
-	if err := json.Unmarshal(body, &respData); err != nil {
+	if err = json.Unmarshal(body, &respData); err != nil {
 		return httpserver.Response{}, errors.Join(ErrClient, err)
 	}
 	return respData, nil

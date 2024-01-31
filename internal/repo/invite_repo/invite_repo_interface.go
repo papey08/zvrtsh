@@ -8,13 +8,13 @@ import (
 )
 
 type InviteRepo interface {
-	CreateInviteCode(ctx context.Context, inviteCode string, id uint64) error
-	GetId(ctx context.Context, inviteCode string) (uint64, error)
+	CreateInviteCode(ctx context.Context, inviteCode string, id string) error
+	GetId(ctx context.Context, inviteCode string) (string, error)
 }
 
 func New() InviteRepo {
 	return &inmemory.InviteRepoImpl{
 		Mu:      new(sync.Mutex),
-		Invites: make(map[string]uint64),
+		Invites: make(map[string]string),
 	}
 }

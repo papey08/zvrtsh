@@ -1,7 +1,7 @@
 package model
 
 type Session struct {
-	Id     uint64
+	Id     string
 	Sheets [2]Sheet
 }
 
@@ -23,7 +23,7 @@ const (
 )
 
 type Sheet struct {
-	OwnerId uint64
+	OwnerId string
 	Steps   []Step
 }
 

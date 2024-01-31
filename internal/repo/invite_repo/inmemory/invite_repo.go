@@ -1,3 +1,4 @@
+// deprecated
 package inmemory
 
 import (
@@ -8,10 +9,10 @@ import (
 
 type InviteRepoImpl struct {
 	Mu      *sync.Mutex
-	Invites map[string]uint64
+	Invites map[string]string
 }
 
-func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, id uint64) error {
+func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, id string) error {
 	i.Mu.Lock()
 	defer i.Mu.Unlock()
 
@@ -23,13 +24,13 @@ func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, 
 	return nil
 }
 
-func (i *InviteRepoImpl) GetId(_ context.Context, inviteCode string) (uint64, error) {
+func (i *InviteRepoImpl) GetId(_ context.Context, inviteCode string) (string, error) {
 	i.Mu.Lock()
 	defer i.Mu.Unlock()
 
 	id, ok := i.Invites[inviteCode]
 	if !ok {
-		return 0, model.ErrNoInviteCode
+		return "", model.ErrNoInviteCode
 	}
 	return id, nil
 }

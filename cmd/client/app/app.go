@@ -2,7 +2,6 @@ package app
 
 import (
 	"net/http"
-	"time"
 )
 
 type App struct {
@@ -10,18 +9,16 @@ type App struct {
 	baseUrl string
 
 	name       string
-	secretCode uint64
+	secretCode string
 
-	SessionCode uint64
+	SessionCode string
 	StepsAmount int
 	CurrentStep int
 }
 
 func New(addr string) App {
 	return App{
-		cli: &http.Client{
-			Timeout: time.Second * 10,
-		},
+		cli:     &http.Client{},
 		baseUrl: addr + "/zvrtsh/api/v1/",
 	}
 }

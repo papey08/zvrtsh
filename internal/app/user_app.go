@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"math/rand"
+	"github.com/google/uuid"
 	"strings"
 	"unicode"
 	"zvrtsh/internal/model"
 	inviterepo "zvrtsh/internal/repo/invite_repo"
 	userrepo "zvrtsh/internal/repo/user_repo"
-
-	"github.com/Pallinder/go-randomdata"
 )
 
 const salt = "привет я коза"
@@ -64,12 +62,12 @@ func isValidPassword(password string) bool {
 	return true
 }
 
-func generateSecretCode() uint64 {
-	return rand.Uint64()
+func generateSecretCode() string {
+	return uuid.New().String()
 }
 
 func generateInviteCode() string {
-	return randomdata.PhoneNumber()
+	return uuid.New().String()
 }
 
 func getHashedString(str string) string {
@@ -79,7 +77,7 @@ func getHashedString(str string) string {
 	return hex.EncodeToString(hashSum)
 }
 
-func (u *userAppImpl) GetUserInviteCode(ctx context.Context, name string, token uint64) (string, error) {
+func (u *userAppImpl) GetUserInviteCode(ctx context.Context, name string, token string) (string, error) {
 	user, err := u.users.GetUser(ctx, name)
 	if err != nil {
 		return "", err
@@ -91,20 +89,20 @@ func (u *userAppImpl) GetUserInviteCode(ctx context.Context, name string, token 
 
 	inviteCode := generateInviteCode()
 
-	if err := u.invites.CreateInviteCode(ctx, inviteCode, token); err != nil {
+	if err = u.invites.CreateInviteCode(ctx, inviteCode, token); err != nil {
 		return "", err
 	}
 	return inviteCode, nil
 }
 
-func (u *userAppImpl) GetUserSecretCode(ctx context.Context, name string, password string) (uint64, error) {
+func (u *userAppImpl) GetUserSecretCode(ctx context.Context, name string, password string) (string, error) {
 	user, err := u.users.GetUser(ctx, name)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	if user.EncodedPassword != getHashedString(password) {
-		return 0, model.ErrWrongPassword
+		return "", model.ErrWrongPassword
 	}
 
 	return user.SecretCode, nil
