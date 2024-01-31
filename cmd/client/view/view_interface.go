@@ -1,5 +1,7 @@
 package view
 
+import defaultview "zvrtsh/cmd/client/view/default_view"
+
 type View interface {
 	Start()
 	SetHost()
@@ -12,4 +14,8 @@ type View interface {
 	ShowQuestion()
 	GetAnswer()
 	ShowResults()
+}
+
+func New() View {
+	return &defaultview.ViewImpl{}
 }

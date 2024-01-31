@@ -3,15 +3,15 @@ package defaultview
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
-	"zvrtsh/internal/model"
-
 	"zvrtsh/cmd/client/app"
+	"zvrtsh/internal/model"
+	"zvrtsh/internal/ports/httpserver"
 )
 
 const (
@@ -86,7 +86,7 @@ func (v *ViewImpl) Login() {
 			fmt.Println("Войти в аккаунт не получилось(")
 			fmt.Printf("Текст ошибки: %s\n", err.Error())
 		} else {
-			fmt.Println("Поздравляем! Регистрация прошла успешно")
+			fmt.Println("Поздравляем! Вы успешно вошли в свой аккаунт")
 			break
 		}
 	}
@@ -116,34 +116,31 @@ func (v *ViewImpl) ShowInviteCode() {
 
 func (v *ViewImpl) EnterSession() {
 	fmt.Println("Попросите у игрока, который вас пригласил, id игры, и введите его:")
-	var codeStr string
+	var code string
 	for {
-		fmt.Scan(codeStr)
-		if code, err := strconv.ParseUint(codeStr, 10, 64); err != nil {
-			fmt.Println(wrongInput)
+		fmt.Scan(&code)
+		if stepsAmount, err := v.app.GetSession(v.ctx, code); err != nil {
+			fmt.Println("Странно, что-то пошло не так, попробуйте ввести другой код.")
+			fmt.Printf("Текст ошибки: %s\n", err.Error())
 		} else {
-			var stepsAmount int
-			if stepsAmount, err = v.app.GetSession(v.ctx, code); err != nil {
-				fmt.Println("Странно, что-то пошло не так, попробуйте ввести другой код.")
-				fmt.Printf("Текст ошибки: %s\n", err.Error())
-			} else {
-				v.app.SessionCode = code
-				v.app.StepsAmount = stepsAmount
-				v.app.CurrentStep = 0
-				break
-			}
+			v.app.SessionCode = code
+			v.app.StepsAmount = stepsAmount
+			v.app.CurrentStep = 0
+			break
 		}
+
 	}
 	v.GetQuestion()
 }
 
 func (v *ViewImpl) CreateSession() {
 	for {
-		fmt.Println("Введите invite-код игрока, с которым хотите сыграть")
-		code, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		fmt.Println("Введите invite-код игрока, с которым хотите сыграть:")
+		var code string
+		fmt.Scan(&code)
 		var stepsAmount int
 		for {
-			fmt.Println("Введите количество вопросов в игре одним числом")
+			fmt.Println("Введите количество вопросов в игре одним числом:")
 			var stepsAmountStr string
 			fmt.Scan(&stepsAmountStr)
 			var err error
@@ -160,8 +157,11 @@ func (v *ViewImpl) CreateSession() {
 			fmt.Printf("Текст ошибки: %s\n", err.Error())
 		} else {
 			fmt.Println("Игра успешно создана. Код вашей игры:")
-			fmt.Printf("\n%d\n\n", sessionCode)
+			fmt.Printf("\n%s\n\n", sessionCode)
 			fmt.Println("Покажите код другому игроку, чтобы он смог присоединиться к игре.")
+			v.app.SessionCode = sessionCode
+			v.app.StepsAmount = stepsAmount
+			v.app.CurrentStep = 0
 			break
 		}
 	}
@@ -172,8 +172,10 @@ func (v *ViewImpl) GetQuestion() {
 	for {
 		fmt.Println("Введите ваш вопрос целиком:")
 		hiddenQuestion, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		hiddenQuestion = hiddenQuestion[:len(hiddenQuestion)-1]
 		fmt.Println("Введите часть вопроса, которая будет показана другому игроку:")
 		openQuestion, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		openQuestion = openQuestion[:len(openQuestion)-1]
 		if err := v.app.MakeQuestion(v.ctx, v.app.CurrentStep, hiddenQuestion, openQuestion); err != nil {
 			fmt.Println("Странно, что-то пошло не так, попробуйте снова.")
 			fmt.Printf("Текст ошибки: %s\n", err.Error())
@@ -187,11 +189,15 @@ func (v *ViewImpl) GetQuestion() {
 
 func (v *ViewImpl) ShowQuestion() {
 	var openQuestion string
+	var firstLog = true
 	for {
 		var err error
 		openQuestion, err = v.app.GetQuestion(v.ctx, v.app.CurrentStep)
-		if errors.Is(err, model.ErrStepForbidden) {
-			fmt.Println("Ждём, пока второй игрок составит свой вопрос…")
+		if err != nil && strings.Contains(err.Error(), model.ErrStepForbidden.Error()) {
+			if firstLog {
+				fmt.Println("Ждём, пока второй игрок составит свой вопрос…")
+				firstLog = false
+			}
 			time.Sleep(time.Second * 5)
 			continue
 		} else if err != nil {
@@ -203,7 +209,7 @@ func (v *ViewImpl) ShowQuestion() {
 		}
 	}
 
-	fmt.Printf("Вопрос: %s", openQuestion)
+	fmt.Printf("Вопрос: %s\n", openQuestion)
 	v.GetAnswer()
 }
 
@@ -211,6 +217,7 @@ func (v *ViewImpl) GetAnswer() {
 	for {
 		fmt.Println("Пожалуйста, введите ответ на вопрос:")
 		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		answer = answer[:len(answer)-1]
 		if err := v.app.MakeAnswer(v.ctx, v.app.CurrentStep, answer); err != nil {
 			fmt.Println("Странно, что-то пошло не так, попробуйте снова.")
 			fmt.Printf("Текст ошибки: %s\n", err.Error())
@@ -230,17 +237,30 @@ func (v *ViewImpl) GetAnswer() {
 
 func (v *ViewImpl) ShowResults() {
 	fmt.Println("Похоже, вы закончили игру.")
-	data, err := v.app.GetResults(v.ctx)
-	if err != nil {
-		fmt.Println("Странно, что-то пошло не так. Извините пожалуйста.")
-		fmt.Printf("Текст ошибки: %s\n", err.Error())
-		return
+	var data httpserver.GetSessionData
+	var firstLog = true
+	for {
+		var err error
+		data, err = v.app.GetResults(v.ctx)
+		if err != nil && strings.Contains(err.Error(), model.ErrSessionUndone.Error()) {
+			if firstLog {
+				fmt.Println("Ждём, пока второй игрок ответит…")
+				firstLog = false
+			}
+			time.Sleep(time.Second * 5)
+		}
+		if err != nil {
+			fmt.Println("Странно, что-то пошло не так. Извините пожалуйста.")
+			fmt.Printf("Текст ошибки: %s\n", err.Error())
+			return
+		}
+		break
 	}
 
-	fmt.Println("Лист 1\n")
+	fmt.Println("\nЛист 1\n")
 	time.Sleep(time.Second * 3)
 	for i, step := range data.Sheets[0].Steps {
-		fmt.Printf("Вопрос %d: %s\n", i, step.HiddenQuestion)
+		fmt.Printf("Вопрос %d: %s\n", i+1, step.HiddenQuestion)
 		time.Sleep(time.Second * 3)
 		fmt.Printf("Ответ: %s\n\n", step.Answer)
 		time.Sleep(time.Second * 3)
@@ -249,7 +269,7 @@ func (v *ViewImpl) ShowResults() {
 	fmt.Println("Лист 2\n")
 	time.Sleep(time.Second * 3)
 	for i, step := range data.Sheets[1].Steps {
-		fmt.Printf("Вопрос %d: %s\n", i, step.HiddenQuestion)
+		fmt.Printf("Вопрос %d: %s\n", i+1, step.HiddenQuestion)
 		time.Sleep(time.Second * 3)
 		fmt.Printf("Ответ: %s\n\n", step.Answer)
 		time.Sleep(time.Second * 3)
@@ -264,11 +284,11 @@ func isInputOne() bool {
 		var ans string
 		fmt.Scan(&ans)
 		if intAns, _ := strconv.Atoi(ans); intAns == 1 {
-			return false
-		} else if intAns == 2 {
 			return true
+		} else if intAns == 2 {
+			return false
 		} else {
-			fmt.Println()
+			fmt.Println(wrongInput)
 			continue
 		}
 	}
