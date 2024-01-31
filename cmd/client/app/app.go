@@ -9,9 +9,12 @@ type App struct {
 	cli     *http.Client
 	baseUrl string
 
-	name        string
-	secretCode  uint64
-	sessionCode uint64
+	name       string
+	secretCode uint64
+
+	SessionCode uint64
+	StepsAmount int
+	CurrentStep int
 }
 
 func New(addr string) App {
