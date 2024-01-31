@@ -29,7 +29,7 @@ func (u *UserRepoImpl) CreateUser(_ context.Context, name string, encodedPasswor
 	return newUser, nil
 }
 
-func (u *UserRepoImpl) GetUser(ctx context.Context, name string) (model.User, error) {
+func (u *UserRepoImpl) GetUser(_ context.Context, name string) (model.User, error) {
 	u.Mu.Lock()
 	defer u.Mu.Unlock()
 
