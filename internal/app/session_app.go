@@ -54,6 +54,19 @@ func (a *sessionAppImpl) CreateSession(ctx context.Context, code01 string, code0
 	return sessionId, nil
 }
 
+func (a *sessionAppImpl) GetSession(_ context.Context, sessionId uint64, userId uint64) (model.Session, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if session, ok := a.sessions[sessionId]; !ok {
+		return model.Session{}, model.ErrNoSession
+	} else if session.Sheets[0].OwnerId != userId && session.Sheets[1].OwnerId != userId {
+		return model.Session{}, model.ErrUserForbidden
+	} else {
+		return *session, nil
+	}
+}
+
 func generateSessionId() uint64 {
 	return rand.Uint64()
 }
@@ -103,7 +116,7 @@ func (a *sessionAppImpl) MakeQuestion(_ context.Context, sessionId uint64, userI
 	return nil
 }
 
-func (a *sessionAppImpl) MakeAnswer(ctx context.Context, sessionId uint64, userId uint64, stepIdx int, answer string) error {
+func (a *sessionAppImpl) MakeAnswer(_ context.Context, sessionId uint64, userId uint64, stepIdx int, answer string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -184,7 +197,7 @@ func (a *sessionAppImpl) GetQuestion(_ context.Context, sessionId uint64, userId
 	return sheet.Steps[stepIdx].OpenQuestion, nil
 }
 
-func (a *sessionAppImpl) GetResults(ctx context.Context, sessionId uint64, userId uint64) (model.Session, error) {
+func (a *sessionAppImpl) GetResults(_ context.Context, sessionId uint64, userId uint64) (model.Session, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

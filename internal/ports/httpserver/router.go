@@ -8,6 +8,7 @@ import (
 
 func appRouter(r *gin.RouterGroup, a app.App) {
 	r.POST("/session", createSession(a))
+	r.GET("/session", getSession(a))
 	r.POST("/question", makeQuestion(a))
 	r.POST("/answer", makeAnswer(a))
 	r.GET("/question", getQuestion(a))

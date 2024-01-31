@@ -3,6 +3,8 @@ package inviterepo
 import (
 	"context"
 	"sync"
+
+	"zvrtsh/internal/repo/invite_repo/inmemory"
 )
 
 type InviteRepo interface {
@@ -11,8 +13,8 @@ type InviteRepo interface {
 }
 
 func New() InviteRepo {
-	return &inviteRepoImpl{
-		mu:      new(sync.Mutex),
-		invites: make(map[string]uint64),
+	return &inmemory.InviteRepoImpl{
+		Mu:      new(sync.Mutex),
+		Invites: make(map[string]uint64),
 	}
 }

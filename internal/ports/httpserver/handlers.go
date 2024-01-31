@@ -34,6 +34,39 @@ func createSession(a app.App) gin.HandlerFunc {
 	}
 }
 
+func getSession(a app.App) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sessionIdStr := c.Query("session_id")
+		userIdStr := c.GetHeader("user_id")
+
+		sessionId, err := strconv.ParseUint(sessionIdStr, 10, 64)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
+			return
+		}
+		userId, err := strconv.ParseUint(userIdStr, 10, 64)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, errorResponse(model.ErrInvalidInput))
+			return
+		}
+
+		session, err := a.GetSession(c, sessionId, userId)
+		switch {
+		case errors.Is(err, model.ErrNoSession):
+			c.AbortWithStatusJSON(http.StatusNotFound, errorResponse(model.ErrNoSession))
+		case errors.Is(err, model.ErrUserForbidden):
+			c.AbortWithStatusJSON(http.StatusForbidden, errorResponse(model.ErrUserForbidden))
+		case err == nil:
+			c.JSON(http.StatusOK, successResponse(GetStepsAmountData{
+				SessionId:   session.Id,
+				StepsAmount: len(session.Sheets[0].Steps),
+			}))
+		default:
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse(model.ErrServer))
+		}
+	}
+}
+
 func makeQuestion(a app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req MakeQuestionRequest

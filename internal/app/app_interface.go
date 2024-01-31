@@ -15,6 +15,7 @@ type App interface {
 
 type sessionApp interface {
 	CreateSession(ctx context.Context, code01 string, code02 string, stepsAmount int) (uint64, error)
+	GetSession(ctx context.Context, sessionId uint64, userId uint64) (model.Session, error)
 
 	MakeQuestion(ctx context.Context, sessionId uint64, userId uint64, stepIdx int, hiddenQuestion string, openQuestion string) error
 	MakeAnswer(ctx context.Context, sessionId uint64, userId uint64, stepIdx int, answer string) error

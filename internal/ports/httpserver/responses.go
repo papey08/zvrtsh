@@ -6,6 +6,11 @@ type CreateSessionData struct {
 	SessionId uint64 `json:"session_id"`
 }
 
+type GetStepsAmountData struct {
+	SessionId   uint64 `json:"session_id"`
+	StepsAmount int    `json:"steps_amount"`
+}
+
 type GetQuestionData struct {
 	OpenQuestion string `json:"open_question"`
 }

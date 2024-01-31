@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"zvrtsh/internal/model"
+	"zvrtsh/internal/repo/user_repo/inmemory"
 )
 
 type UserRepo interface {
@@ -12,8 +13,8 @@ type UserRepo interface {
 }
 
 func New() UserRepo {
-	return &userRepoImpl{
-		mu:    new(sync.Mutex),
-		users: make(map[string]*model.User),
+	return &inmemory.UserRepoImpl{
+		Mu:    new(sync.Mutex),
+		Users: make(map[string]*model.User),
 	}
 }
