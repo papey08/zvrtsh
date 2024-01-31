@@ -1,0 +1,25 @@
+version: "3"
+
+services:
+  zvrtsh-app:
+    build: ./
+    command: ./zvrtsh-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres-users
+
+  postgres-users:
+    image: postgres:15.3
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: "root"
+      POSTGRES_DB: postgres
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./migrations/:/docker-entrypoint-initdb.d/
+    ports:
+      - "5432:5432"
+
+volumes:
+  db-data:
