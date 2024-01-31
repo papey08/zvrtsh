@@ -30,5 +30,6 @@ var (
 	ErrNoInviteCode = errors.New("given invite code not exists")
 
 	// 500 😱😱😱
-	ErrServer = errors.New("sorry, something wrong with the server")
+	ErrServer   = errors.New("sorry, something wrong with the server")
+	ErrDatabase = errors.New("sorry, something wrong with the database")
 )
