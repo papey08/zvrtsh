@@ -5,10 +5,10 @@ import (
 	userrepo "zvrtsh/internal/repo/user_repo"
 )
 
-func New(invites inviterepo.InviteRepo, users userrepo.UserRepo) App {
+func New(invites inviterepo.InviteRepo, users userrepo.UserRepo, passwordSalt string) App {
 	return &app{
 		sessionApp: newSessionApp(invites),
-		userApp:    newUserApp(users, invites),
+		userApp:    newUserApp(users, invites, passwordSalt),
 	}
 }
 

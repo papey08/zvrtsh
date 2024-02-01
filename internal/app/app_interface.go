@@ -38,9 +38,10 @@ type userApp interface {
 	GetUserSecretCode(ctx context.Context, name string, password string) (string, error)
 }
 
-func newUserApp(users userrepo.UserRepo, invites inviterepo.InviteRepo) userApp {
+func newUserApp(users userrepo.UserRepo, invites inviterepo.InviteRepo, passwordSalt string) userApp {
 	return &userAppImpl{
-		users:   users,
-		invites: invites,
+		users:        users,
+		invites:      invites,
+		passwordSalt: passwordSalt,
 	}
 }

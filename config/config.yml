@@ -1,0 +1,10 @@
+http-server:
+  host: "localhost"
+  port: 8080
+
+users-db:
+  user: "root"
+  db: "postgres"
+  host: "postgres-users"
+  port: 5432
+  sslmode: "disable"

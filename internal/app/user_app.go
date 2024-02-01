@@ -12,15 +12,14 @@ import (
 	userrepo "zvrtsh/internal/repo/user_repo"
 )
 
-const salt = "привет я коза"
-
 type userAppImpl struct {
-	users   userrepo.UserRepo
-	invites inviterepo.InviteRepo
+	users        userrepo.UserRepo
+	invites      inviterepo.InviteRepo
+	passwordSalt string
 }
 
 func (u *userAppImpl) RegisterUser(ctx context.Context, name string, password string) (model.User, error) {
-	encodedPassword := getHashedString(password)
+	encodedPassword := getHashedString(password, u.passwordSalt)
 	secretCode := generateSecretCode()
 
 	if !isValidName(name) || !isValidPassword(password) {
@@ -70,7 +69,7 @@ func generateInviteCode() string {
 	return uuid.New().String()
 }
 
-func getHashedString(str string) string {
+func getHashedString(str string, salt string) string {
 	hash := sha256.New()
 	hash.Write([]byte(str + salt))
 	hashSum := hash.Sum(nil)
@@ -101,7 +100,7 @@ func (u *userAppImpl) GetUserSecretCode(ctx context.Context, name string, passwo
 		return "", err
 	}
 
-	if user.EncodedPassword != getHashedString(password) {
+	if user.EncodedPassword != getHashedString(password, u.passwordSalt) {
 		return "", model.ErrWrongPassword
 	}
 

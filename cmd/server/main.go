@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/joho/godotenv"
+	"github.com/spf13/viper"
 	"log"
 	"net/http"
 	"os"
@@ -19,23 +21,31 @@ import (
 const addr = "zvrtsh-app:8080"
 
 func main() {
+	viper.SetConfigFile("config/config.yml")
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatal("cannot read config file: ", err.Error())
+	}
+	if err := godotenv.Load("config/.env"); err != nil {
+		log.Fatal("unable to load .env file: ", err.Error())
+	}
+
 	inviteRepo := inviterepo.New()
 	userRepo, err := userrepo.New(context.Background(),
 		fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			"root",
-			"root",
-			"postgres-users",
-			5432,
-			"postgres",
-			"disable",
+			viper.GetString("users-db.user"),
+			os.Getenv("USERS_DB_PASSWORD"),
+			viper.GetString("users-db.host"),
+			viper.GetInt("users-db.port"),
+			viper.GetString("users-db.db"),
+			viper.GetString("users-db.sslmode"),
 		),
 	)
-	defer userRepo.Close()
 	if err != nil {
-		log.Fatal(err.Error())
+		log.Fatal("cannot connect to the database: ", err.Error())
 	}
+	defer userRepo.Close()
 
-	a := app.New(inviteRepo, userRepo)
+	a := app.New(inviteRepo, userRepo, os.Getenv("USER_PASSWORD_SALT"))
 	srv := httpserver.New(addr, a)
 
 	// preparing graceful shutdown
@@ -45,7 +55,7 @@ func main() {
 
 	go func() {
 		log.Println("Starting http server")
-		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		if err = srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal("can't listen and serve server:", err.Error())
 		}
 	}()
@@ -57,7 +67,7 @@ func main() {
 	defer cancel()
 
 	if err = srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server graceful shutdown failed:", err.Error())
+		log.Fatal("Server graceful shutdown failed: ", err.Error())
 	}
 	log.Println("Server was gracefully stopped")
 }
