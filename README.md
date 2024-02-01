@@ -7,6 +7,9 @@
 
 ### Запуск сервера:
 
+Добавить `config/.env`, соответствующий схеме 
+[config/.env.dist](config/.env.dist)
+
 ```bash
 docker-compose up
 ```
