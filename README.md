@@ -20,5 +20,5 @@ docker-compose up
 ### Запуск клиента не на винде:
 
 ```bash
-./bin/cli
+./bin/cli-linux
 ```
