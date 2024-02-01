@@ -25,11 +25,13 @@ type sessionApp interface {
 }
 
 func newSessionApp(invites inviterepo.InviteRepo) sessionApp {
-	return &sessionAppImpl{
+	a := &sessionAppImpl{
 		mu:       &sync.Mutex{},
 		sessions: make(map[string]*model.Session),
 		invites:  invites,
 	}
+	a.purgeSessions()
+	return a
 }
 
 type userApp interface {

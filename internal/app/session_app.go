@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/google/uuid"
 	"sync"
+	"time"
 	"zvrtsh/internal/model"
 	inviterepo "zvrtsh/internal/repo/invite_repo"
 )
@@ -215,4 +216,21 @@ func (a *sessionAppImpl) GetResults(_ context.Context, sessionId string, userId 
 	} else {
 		return model.Session{}, model.ErrSessionUndone
 	}
+}
+
+func (a *sessionAppImpl) purgeSessions() {
+	go func() {
+		for {
+			time.Sleep(time.Minute * 30)
+			toRemove := make([]string, 0, len(a.sessions))
+			for k, v := range a.sessions {
+				if v.Status() == model.StatusDone {
+					toRemove = append(toRemove, k)
+				}
+			}
+			for _, k := range toRemove {
+				delete(a.sessions, k)
+			}
+		}
+	}()
 }

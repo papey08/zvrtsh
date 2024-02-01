@@ -1,3 +1,4 @@
+// deprecated
 package inmemory
 
 import (
