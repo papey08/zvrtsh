@@ -17,7 +17,7 @@ docker-compose up
 ### Запуск клиента на винде:
 
 ```bash
-./bin/cli-win.exe
+./bin/cli-windows.exe
 ```
 
 ### Запуск клиента не на винде:

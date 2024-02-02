@@ -18,8 +18,6 @@ import (
 	userrepo "zvrtsh/internal/repo/user_repo"
 )
 
-const addr = "zvrtsh-app:8080"
-
 func main() {
 	viper.SetConfigFile("config/config.yml")
 	if err := viper.ReadInConfig(); err != nil {
@@ -46,6 +44,8 @@ func main() {
 	defer userRepo.Close()
 
 	a := app.New(inviteRepo, userRepo, os.Getenv("USER_PASSWORD_SALT"))
+
+	addr := fmt.Sprintf("%s:%d", viper.GetString("http-server.host"), viper.GetInt("http-server.port"))
 	srv := httpserver.New(addr, a)
 
 	// preparing graceful shutdown

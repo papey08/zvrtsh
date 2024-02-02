@@ -258,8 +258,8 @@ func (v *ViewImpl) ShowResults() {
 				firstLog = false
 			}
 			time.Sleep(time.Second * 5)
-		}
-		if err != nil {
+			continue
+		} else if err != nil {
 			printString("Странно, что-то пошло не так. Извините пожалуйста.")
 			printString(fmt.Sprintf("Текст ошибки: %s", err.Error()))
 			return

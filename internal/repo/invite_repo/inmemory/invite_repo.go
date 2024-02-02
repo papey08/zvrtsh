@@ -12,7 +12,7 @@ type InviteRepoImpl struct {
 	Invites map[string]model.Invite
 }
 
-func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, _ string) error {
+func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, id string) error {
 	i.Mu.Lock()
 	defer i.Mu.Unlock()
 
@@ -21,8 +21,9 @@ func (i *InviteRepoImpl) CreateInviteCode(_ context.Context, inviteCode string, 
 	}
 
 	i.Invites[inviteCode] = model.Invite{
-		Code:         inviteCode,
-		CreationDate: time.Now().UTC(),
+		InviteCode:     inviteCode,
+		UserSecretCode: id,
+		CreationDate:   time.Now().UTC(),
 	}
 	return nil
 }
@@ -35,7 +36,7 @@ func (i *InviteRepoImpl) GetId(_ context.Context, inviteCode string) (string, er
 	if !ok {
 		return "", model.ErrNoInviteCode
 	}
-	return id.Code, nil
+	return id.UserSecretCode, nil
 }
 
 func (i *InviteRepoImpl) PurgeInviteCodes() {

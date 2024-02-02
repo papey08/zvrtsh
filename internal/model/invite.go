@@ -3,6 +3,7 @@ package model
 import "time"
 
 type Invite struct {
-	Code         string
-	CreationDate time.Time
+	InviteCode     string
+	UserSecretCode string
+	CreationDate   time.Time
 }

@@ -1,5 +1,5 @@
 http-server:
-  host: "localhost"
+  host: "zvrtsh-app"
   port: 8080
 
 users-db:
