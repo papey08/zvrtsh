@@ -1,0 +1,711 @@
+openapi: 3.0.3
+
+info:
+  title: Zvrtsh API
+  version: 1.0.0
+  description: |
+    HTTP API of the "Zvrtsh" game for two players.
+
+    Every player writes a question on a sheet of paper, folds it so only the
+    first part ("open question") is visible, and hands the sheet to the opponent,
+    who answers the open part blindly. The game goes on for a fixed number of
+    steps, after which both sheets are unfolded.
+
+    At every step `i` each player does two things:
+
+    1. writes their own question for step `i` (`POST .../question`);
+    2. answers the open part of the opponent's question for step `i`
+       (`GET .../opponent-question`, then `POST .../answer`).
+
+    Step `i + 1` of a sheet becomes available only after step `i` of this sheet
+    has been answered.
+
+servers:
+  - url: /zvrtsh/api/v1
+
+tags:
+  - name: users
+  - name: auth
+  - name: invites
+  - name: sessions
+  - name: events
+
+paths:
+  /users:
+    post:
+      tags: [users]
+      operationId: registerUser
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: User with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/token:
+    post:
+      tags: [auth]
+      operationId: createToken
+      summary: Exchange name and password for an access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /invites:
+    post:
+      tags: [invites]
+      operationId: createInvite
+      summary: Create a one-time invite code
+      description: |
+        Creates an invite code that another user can use to start a session with
+        the caller. The caller chooses the number of steps of the session. An
+        invite is valid for a limited time and can be used once. A new invite
+        replaces the previous one of the same user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInviteRequest'
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [invites]
+      operationId: deleteInvite
+      summary: Cancel the active invite of the caller
+      description: Does nothing if the caller has no active invite.
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Invite cancelled
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: List sessions of the caller
+      description: Sessions are sorted by the time of the last action, the most recent first.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Sessions of the caller
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [sessions]
+      operationId: createSession
+      summary: Start a session with the owner of an invite code
+      description: |
+        The caller and the owner of the invite become the two players, the
+        number of steps is taken from the invite. The invite code is consumed.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Invite code does not exist or has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /events:
+    get:
+      tags: [events]
+      operationId: subscribeEvents
+      summary: WebSocket with live updates of the caller's sessions
+      description: |
+        Upgrades the connection to a WebSocket. Game actions are still made over
+        REST; the socket only tells about their results, so clients do not poll.
+
+        1. Within 5 seconds after the connection the client sends
+           `EventsAuthMessage` with its token: browsers cannot set the
+           `Authorization` header of a WebSocket.
+        2. The server answers with `EventsServerMessage` of type `ready`. Every
+           change made after it is delivered, so this is the moment to (re)load
+           the state over REST.
+        3. When a session of the caller is created or changed, the server sends
+           `EventsServerMessage` of type `session_updated` with the whole session
+           as the caller sees it. Snapshots of a session have a growing `version`,
+           an older one than already known can be ignored.
+
+        The client sends nothing after the authentication. The server pings the
+        client every 25 seconds. Close codes:
+
+        - `1008` authentication failed;
+        - `1013` the client did not keep up with the events, reconnect;
+        - `1001` the server is shutting down, reconnect later.
+      responses:
+        '101':
+          description: Switching to the WebSocket protocol
+        '426':
+          description: The request is not a WebSocket upgrade
+
+  /sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: Get session info
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Session info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/steps/{step_index}/question:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/StepIndex'
+    post:
+      tags: [sessions]
+      operationId: makeQuestion
+      summary: Write the caller's question for the step
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionRequest'
+      responses:
+        '204':
+          description: Question saved
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          $ref: '#/components/responses/StepUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/steps/{step_index}/opponent-question:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/StepIndex'
+    get:
+      tags: [sessions]
+      operationId: getOpponentQuestion
+      summary: Get the open part of the opponent's question the caller has to answer
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Open part of the question
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenQuestion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          $ref: '#/components/responses/StepUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/steps/{step_index}/answer:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/StepIndex'
+    post:
+      tags: [sessions]
+      operationId: makeAnswer
+      summary: Answer the opponent's question for the step
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswerRequest'
+      responses:
+        '204':
+          description: Answer saved
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          $ref: '#/components/responses/StepUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/finish-vote:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    put:
+      tags: [sessions]
+      operationId: voteFinish
+      summary: Offer or agree to finish the session after the current step
+      description: |
+        When both players have voted, the session is shortened to the current
+        step: the players complete it and the sheets are unfolded. The current
+        step is the latest one either player has written anything on, or the
+        first unfinished one if that is later. Nothing written is lost and
+        nobody has to start a new question. The votes are reset after that.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The session after the vote
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          description: The session is already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [sessions]
+      operationId: cancelFinishVote
+      summary: Withdraw the offer to finish the session
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The session after the vote is withdrawn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          description: The session is already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/results:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [sessions]
+      operationId: getResults
+      summary: Get both unfolded sheets of a finished session
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Both sheets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Results'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          description: Session is not finished yet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token received from `POST /auth/token`
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+    StepIndex:
+      name: step_index
+      in: path
+      required: true
+      description: Zero-based index of the step
+      schema:
+        type: integer
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: Malformed request or invalid data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid credentials or token
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The caller is not a player of this session
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    SessionNotFound:
+      description: Session does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StepUnavailable:
+      description: The step cannot be changed or read right now
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: step is not available right now
+
+    Credentials:
+      type: object
+      required: [name, password]
+      properties:
+        name:
+          type: string
+          minLength: 4
+          maxLength: 30
+          pattern: '^[A-Za-z0-9_]+$'
+        password:
+          type: string
+          minLength: 4
+          maxLength: 30
+
+    User:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    Token:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    CreateInviteRequest:
+      type: object
+      required: [steps_amount]
+      properties:
+        steps_amount:
+          type: integer
+          minimum: 1
+          maximum: 50
+
+    Invite:
+      type: object
+      required: [invite_code, steps_amount, expires_at]
+      properties:
+        invite_code:
+          type: string
+        steps_amount:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+
+    CreateSessionRequest:
+      type: object
+      required: [invite_code]
+      properties:
+        invite_code:
+          type: string
+
+    SessionStatus:
+      type: string
+      enum: [in_work, done]
+
+    Session:
+      type: object
+      required: [id, version, players, steps_amount, status, progress, my_finish_vote, opponent_finish_vote, updated_at]
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+          format: int64
+          description: Grows with every change of the session
+        players:
+          type: array
+          description: Names of the two players
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+        steps_amount:
+          type: integer
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+        progress:
+          type: array
+          description: State of every step from the point of view of the caller
+          items:
+            $ref: '#/components/schemas/StepProgress'
+        my_finish_vote:
+          type: boolean
+          description: The caller offers to finish the session after the current step
+        opponent_finish_vote:
+          type: boolean
+          description: The opponent offers to finish the session after the current step
+        updated_at:
+          type: string
+          format: date-time
+          description: Time of the last action in the session
+
+    StepProgress:
+      type: object
+      required: [my_question, my_answer, opponent_question, opponent_answer]
+      properties:
+        my_question:
+          type: boolean
+          description: The caller has written their question for the step
+        my_answer:
+          type: boolean
+          description: The caller has answered the opponent's question of the step
+        opponent_question:
+          type: boolean
+          description: The opponent has written their question for the step
+        opponent_answer:
+          type: boolean
+          description: The opponent has answered the caller's question of the step
+
+    QuestionRequest:
+      type: object
+      required: [hidden_question, open_question]
+      properties:
+        hidden_question:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Full question, will be folded
+        open_question:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Short visible part of the question
+
+    OpenQuestion:
+      type: object
+      required: [open_question]
+      properties:
+        open_question:
+          type: string
+
+    AnswerRequest:
+      type: object
+      required: [answer]
+      properties:
+        answer:
+          type: string
+          minLength: 1
+          maxLength: 500
+
+    Step:
+      type: object
+      required: [hidden_question, open_question, answer]
+      properties:
+        hidden_question:
+          type: string
+        open_question:
+          type: string
+        answer:
+          type: string
+
+    Sheet:
+      type: object
+      required: [owner, steps]
+      properties:
+        owner:
+          type: string
+          description: Name of the player whose sheet it is
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+
+    Results:
+      type: object
+      required: [id, sheets]
+      properties:
+        id:
+          type: string
+        sheets:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/Sheet'
+
+    EventsAuthMessage:
+      type: object
+      description: The first and the only message from the client to `/events`
+      required: [type, token]
+      properties:
+        type:
+          type: string
+          enum: [auth]
+        token:
+          type: string
+
+    EventsServerMessage:
+      type: object
+      description: A message from the server to `/events`
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ready, session_updated]
+        session:
+          $ref: '#/components/schemas/Session'
