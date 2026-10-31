@@ -48,16 +48,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Create a one-time invite code
-         * @description Creates an invite code that another user can use to start a session with
-         *     the caller. The caller chooses the number of steps of the session. An
-         *     invite is valid for a limited time and can be used once. A new invite
-         *     replaces the previous one of the same user.
+         * Create a session in the lobby with an invite code
+         * @description Creates a session in the `lobby` status with the caller as its host and
+         *     an invite code, by which up to 7 more players can join it. The caller
+         *     chooses the number of steps. The code is valid for a limited time. A new
+         *     invite cancels the session the caller is still waiting in as the host.
          */
         post: operations["createInvite"];
         /**
-         * Cancel the active invite of the caller
-         * @description Does nothing if the caller has no active invite.
+         * Cancel the session the caller waits in as the host
+         * @description Deletes the session in the lobby created by the caller, the joined
+         *     players get `session_deleted`. Does nothing if there is no such session.
          */
         delete: operations["deleteInvite"];
         options?: never;
@@ -79,9 +80,9 @@ export interface paths {
         get: operations["listSessions"];
         put?: never;
         /**
-         * Start a session with the owner of an invite code
-         * @description The caller and the owner of the invite become the two players, the
-         *     number of steps is taken from the invite. The invite code is consumed.
+         * Join a session in the lobby by its invite code
+         * @description Adds the caller to the players of the session. Joining a session the
+         *     caller already plays in returns it as is.
          */
         post: operations["createSession"];
         delete?: never;
@@ -112,6 +113,8 @@ export interface paths {
          *        `EventsServerMessage` of type `session_updated` with the whole session
          *        as the caller sees it. Snapshots of a session have a growing `version`,
          *        an older one than already known can be ignored.
+         *     4. When the host cancels a session in the lobby, the server sends
+         *        `EventsServerMessage` of type `session_deleted` with its `session_id`.
          *
          *     The client sends nothing after the authentication. The server pings the
          *     client every 25 seconds. Close codes:
@@ -148,6 +151,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the session with the players who have joined it
+         * @description Only the host can start the session, at any moment when at least two
+         *     players are in it. The invite code stops working.
+         */
+        post: operations["startSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/{session_id}/steps/{step_index}/question": {
         parameters: {
             query?: never;
@@ -161,7 +187,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Write the caller's question for the step */
+        /** Write the caller's question for the step on the sheet they hold */
         post: operations["makeQuestion"];
         delete?: never;
         options?: never;
@@ -169,7 +195,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sessions/{session_id}/steps/{step_index}/opponent-question": {
+    "/sessions/{session_id}/steps/{step_index}/question-to-answer": {
         parameters: {
             query?: never;
             header?: never;
@@ -180,8 +206,8 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get the open part of the opponent's question the caller has to answer */
-        get: operations["getOpponentQuestion"];
+        /** Get the open part of the question the caller has to answer on the step */
+        get: operations["getQuestionToAnswer"];
         put?: never;
         post?: never;
         delete?: never;
@@ -203,7 +229,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer the opponent's question for the step */
+        /** Answer the question for the step on the sheet the caller holds */
         post: operations["makeAnswer"];
         delete?: never;
         options?: never;
@@ -223,11 +249,11 @@ export interface paths {
         get?: never;
         /**
          * Offer or agree to finish the session after the current step
-         * @description When both players have voted, the session is shortened to the current
+         * @description When all players have voted, the session is shortened to the current
          *     step: the players complete it and the sheets are unfolded. The current
-         *     step is the latest one either player has written anything on, or the
-         *     first unfinished one if that is later. Nothing written is lost and
-         *     nobody has to start a new question. The votes are reset after that.
+         *     step is the latest one anybody has written anything on, or the first
+         *     unfinished one if that is later. Nothing written is lost and nobody
+         *     has to start a new question. The votes are reset after that.
          */
         put: operations["voteFinish"];
         post?: never;
@@ -247,7 +273,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get both unfolded sheets of a finished session */
+        /** Get all unfolded sheets of a finished session */
         get: operations["getResults"];
         put?: never;
         post?: never;
@@ -280,6 +306,8 @@ export interface components {
         };
         Invite: {
             invite_code: string;
+            /** @description The session in the lobby the code leads to */
+            session_id: string;
             steps_amount: number;
             /** Format: date-time */
             expires_at: string;
@@ -288,7 +316,7 @@ export interface components {
             invite_code: string;
         };
         /** @enum {string} */
-        SessionStatus: "in_work" | "done";
+        SessionStatus: "lobby" | "in_work" | "done";
         Session: {
             id: string;
             /**
@@ -296,16 +324,21 @@ export interface components {
              * @description Grows with every change of the session
              */
             version: number;
-            /** @description Names of the two players */
+            /** @description The player who has created the session, the first of `players` */
+            host: string;
+            /**
+             * @description Names of the players in the order they have joined. The index of a
+             *     player is their sheet and their ink in the interface. `invite` is
+             *     present in the lobby only.
+             */
             players: string[];
             steps_amount: number;
             status: components["schemas"]["SessionStatus"];
-            /** @description State of every step from the point of view of the caller */
+            invite?: components["schemas"]["Invite"];
+            /** @description State of every step from the point of view of the caller, empty in the lobby */
             progress: components["schemas"]["StepProgress"][];
-            /** @description The caller offers to finish the session after the current step */
-            my_finish_vote: boolean;
-            /** @description The opponent offers to finish the session after the current step */
-            opponent_finish_vote: boolean;
+            /** @description Players who offer to finish the session after the current step */
+            finish_votes: string[];
             /**
              * Format: date-time
              * @description Time of the last action in the session
@@ -313,14 +346,22 @@ export interface components {
             updated_at: string;
         };
         StepProgress: {
-            /** @description The caller has written their question for the step */
+            /**
+             * @description The caller has written their question for the step. It is written
+             *     on the sheet the caller has answered the previous step on, so it is
+             *     available as soon as `my_answer` of the previous step.
+             */
             my_question: boolean;
-            /** @description The caller has answered the opponent's question of the step */
+            /** @description The caller has answered their question of the step */
             my_answer: boolean;
-            /** @description The opponent has written their question for the step */
-            opponent_question: boolean;
-            /** @description The opponent has answered the caller's question of the step */
-            opponent_answer: boolean;
+            /** @description The questions of the step can be answered, everybody has written theirs and the sheets are shuffled */
+            answer_sheet_ready: boolean;
+            /** @description Who writes the question the caller has to answer */
+            answer_sheet_from: string;
+            /** @description How many players have written their question for the step */
+            questions_written: number;
+            /** @description How many players have answered on the step */
+            answers_written: number;
         };
         QuestionRequest: {
             /** @description Full question, will be folded */
@@ -338,14 +379,19 @@ export interface components {
             hidden_question: string;
             open_question: string;
             answer: string;
+            /** @description Who has written the question */
+            asker: string;
+            /** @description Who has answered it */
+            answerer: string;
         };
         Sheet: {
-            /** @description Name of the player whose sheet it is */
+            /** @description The player who has started the sheet with the question of the first step */
             owner: string;
             steps: components["schemas"]["Step"][];
         };
         Results: {
             id: string;
+            /** @description One sheet per player, in the order of `players` */
             sheets: components["schemas"]["Sheet"][];
         };
         /** @description The first and the only message from the client to `/events` */
@@ -357,8 +403,10 @@ export interface components {
         /** @description A message from the server to `/events` */
         EventsServerMessage: {
             /** @enum {string} */
-            type: "ready" | "session_updated";
+            type: "ready" | "session_updated" | "session_deleted";
             session?: components["schemas"]["Session"];
+            /** @description The deleted session, for `session_deleted` */
+            session_id?: string;
         };
     };
     responses: {
@@ -593,6 +641,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The session has already started or has no free places */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };
@@ -647,6 +704,49 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    startSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The started session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description The caller is not the host of this session */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["SessionNotFound"];
+            /** @description The session has already started or has a single player */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
     makeQuestion: {
         parameters: {
             query?: never;
@@ -679,7 +779,7 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    getOpponentQuestion: {
+    getQuestionToAnswer: {
         parameters: {
             query?: never;
             header?: never;
@@ -764,7 +864,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["SessionNotFound"];
-            /** @description The session is already finished */
+            /** @description The session is not started yet or already finished */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -822,7 +922,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Both sheets */
+            /** @description All sheets */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -8,7 +8,6 @@ import (
 	"time"
 	"zvrtsh/internal/app"
 	"zvrtsh/internal/ports/httpserver/api"
-	invitefake "zvrtsh/internal/repo/invite_repo/fake"
 	sessionfake "zvrtsh/internal/repo/session_repo/fake"
 	userfake "zvrtsh/internal/repo/user_repo/fake"
 
@@ -23,7 +22,7 @@ func newLiveServer(t *testing.T, events eventsConfig) (*testServer, string, cont
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cfg := app.Config{InviteTTL: time.Hour, SessionTTL: time.Hour}
-	a := app.New(ctx, cfg, userfake.New(), invitefake.New(), sessionfake.New())
+	a := app.New(ctx, cfg, userfake.New(), sessionfake.New())
 	router := newRouterWithEvents(ctx, a, events)
 	srv := httptest.NewServer(router)
 	t.Cleanup(func() {
@@ -95,25 +94,50 @@ func TestEvents(t *testing.T) {
 
 	var invite api.Invite
 	s.expect(201, "POST", "/invites", bobby, api.CreateInviteRequest{StepsAmount: 2}, &invite)
-	var session api.Session
-	s.expect(201, "POST", "/sessions", alice, api.CreateSessionRequest{InviteCode: invite.InviteCode}, &session)
+	if msg := receive(t, bobbyConn); msg.Type != api.SessionUpdated || msg.Session.Status != api.Lobby || msg.Session.Version != 1 {
+		t.Fatalf("unexpected event about a new lobby: %+v", msg)
+	}
 
+	s.expect(201, "POST", "/sessions", alice, api.CreateSessionRequest{InviteCode: invite.InviteCode}, nil)
 	for _, conn := range []*websocket.Conn{aliceConn, bobbyConn} {
 		msg := receive(t, conn)
-		if msg.Type != api.SessionUpdated || msg.Session == nil || msg.Session.Id != session.Id || msg.Session.Version != 1 {
-			t.Fatalf("unexpected event about a new session: %+v", msg)
+		if msg.Type != api.SessionUpdated || msg.Session == nil || msg.Session.Id != invite.SessionId ||
+			msg.Session.Version != 2 || len(msg.Session.Players) != 2 {
+			t.Fatalf("unexpected event about a joined player: %+v", msg)
 		}
 	}
 
-	s.expect(204, "POST", "/sessions/"+session.Id+"/steps/0/question", alice,
+	s.expect(200, "POST", "/sessions/"+invite.SessionId+"/start", bobby, nil, nil)
+	for _, conn := range []*websocket.Conn{aliceConn, bobbyConn} {
+		if msg := receive(t, conn); msg.Session.Status != api.InWork || msg.Session.Version != 3 {
+			t.Fatalf("unexpected event about the start: %+v", msg)
+		}
+	}
+
+	s.expect(204, "POST", "/sessions/"+invite.SessionId+"/steps/0/question", alice,
 		api.QuestionRequest{HiddenQuestion: "h", OpenQuestion: "o"}, nil)
 
 	// every player sees the session from their own side
-	if got := receive(t, aliceConn).Session; got.Version != 2 || !got.Progress[0].MyQuestion || got.Progress[0].OpponentQuestion {
+	if got := receive(t, aliceConn).Session; got.Version != 4 || !got.Progress[0].MyQuestion || got.Progress[0].QuestionsWritten != 1 {
 		t.Errorf("alice's view: %+v", got)
 	}
-	if got := receive(t, bobbyConn).Session; got.Version != 2 || got.Progress[0].MyQuestion || !got.Progress[0].OpponentQuestion {
+	if got := receive(t, bobbyConn).Session; got.Version != 4 || got.Progress[0].MyQuestion || got.Progress[0].QuestionsWritten != 1 {
 		t.Errorf("bobby's view: %+v", got)
+	}
+}
+
+func TestEventsLobbyCancelled(t *testing.T) {
+	s, url, _ := newLiveServer(t, defaultEventsConfig)
+	alice, bobby := s.signUp("alice"), s.signUp("bobby")
+
+	var invite api.Invite
+	s.expect(201, "POST", "/invites", bobby, api.CreateInviteRequest{StepsAmount: 2}, &invite)
+	s.expect(201, "POST", "/sessions", alice, api.CreateSessionRequest{InviteCode: invite.InviteCode}, nil)
+
+	aliceConn := connect(t, url, alice)
+	s.expect(204, "DELETE", "/invites", bobby, nil, nil)
+	if msg := receive(t, aliceConn); msg.Type != api.SessionDeleted || msg.SessionId == nil || *msg.SessionId != invite.SessionId {
+		t.Errorf("unexpected event about the cancelled lobby: %+v", msg)
 	}
 }
 

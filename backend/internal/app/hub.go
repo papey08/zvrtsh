@@ -9,29 +9,29 @@ import (
 // it is dropped. A dropped subscriber has to subscribe again and reload the state.
 const subscriptionBuffer = 64
 
-// hub delivers updated sessions to the subscriptions of their players.
+// hub delivers changes of sessions to the subscriptions of their players.
 type hub struct {
 	mu   sync.Mutex
-	subs map[string]map[chan model.Session]struct{} // user name -> subscriptions
+	subs map[string]map[chan model.SessionEvent]struct{} // user name -> subscriptions
 }
 
 func newHub() *hub {
-	return &hub{subs: make(map[string]map[chan model.Session]struct{})}
+	return &hub{subs: make(map[string]map[chan model.SessionEvent]struct{})}
 }
 
-func (h *hub) subscribe(userName string) chan model.Session {
+func (h *hub) subscribe(userName string) chan model.SessionEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	ch := make(chan model.Session, subscriptionBuffer)
+	ch := make(chan model.SessionEvent, subscriptionBuffer)
 	if h.subs[userName] == nil {
-		h.subs[userName] = make(map[chan model.Session]struct{})
+		h.subs[userName] = make(map[chan model.SessionEvent]struct{})
 	}
 	h.subs[userName][ch] = struct{}{}
 	return ch
 }
 
-func (h *hub) unsubscribe(userName string, ch chan model.Session) {
+func (h *hub) unsubscribe(userName string, ch chan model.SessionEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -42,22 +42,22 @@ func (h *hub) unsubscribe(userName string, ch chan model.Session) {
 
 // publish never blocks: a subscription with a full buffer is closed instead.
 // The session must not be changed after it is published.
-func (h *hub) publish(session model.Session) {
+func (h *hub) publish(event model.SessionEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	for _, sheet := range session.Sheets {
-		for ch := range h.subs[sheet.Owner] {
+	for _, player := range event.Session.Players {
+		for ch := range h.subs[player.Name] {
 			select {
-			case ch <- session:
+			case ch <- event:
 			default:
-				h.remove(sheet.Owner, ch)
+				h.remove(player.Name, ch)
 			}
 		}
 	}
 }
 
-func (h *hub) remove(userName string, ch chan model.Session) {
+func (h *hub) remove(userName string, ch chan model.SessionEvent) {
 	close(ch)
 	delete(h.subs[userName], ch)
 	if len(h.subs[userName]) == 0 {

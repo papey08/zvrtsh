@@ -37,6 +37,18 @@ func (r *SessionRepo) GetSession(_ context.Context, id string) (model.Session, e
 	return session.Clone(), nil
 }
 
+func (r *SessionRepo) FindByInvite(_ context.Context, code string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for id, session := range r.sessions {
+		if session.Invite != nil && session.Invite.Code == code {
+			return id, nil
+		}
+	}
+	return "", model.ErrNoInviteCode
+}
+
 func (r *SessionRepo) ListSessions(_ context.Context, userName string) ([]model.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -67,6 +79,21 @@ func (r *SessionRepo) UpdateSession(_ context.Context, id string, update func(*m
 	}
 	session.Version = stored.Version + 1
 	r.sessions[id] = session.Clone()
+	return session, nil
+}
+
+func (r *SessionRepo) DeleteSession(_ context.Context, id string, check func(model.Session) error) (model.Session, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	session, ok := r.sessions[id]
+	if !ok {
+		return model.Session{}, model.ErrNoSession
+	}
+	if err := check(session.Clone()); err != nil {
+		return model.Session{}, err
+	}
+	delete(r.sessions, id)
 	return session, nil
 }
 

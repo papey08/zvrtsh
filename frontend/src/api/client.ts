@@ -73,6 +73,11 @@ const messages: Record<string, string> = {
   "you are not a player of this session": "Это чужая партия",
   "step is not available right now": "Этот шаг пока недоступен",
   "session is not finished yet": "Партия ещё не закончена",
+  "session has already started": "Партия уже началась",
+  "session has not started yet": "Партия ещё не началась",
+  "session has no free places": "В партии уже 8 игроков — мест нет",
+  "at least two players are needed to start": "Для начала нужен хотя бы ещё один игрок",
+  "only the host can do it": "Это может только тот, кто создал партию",
 };
 
 /** Turns any error into a message for the player. */
@@ -80,9 +85,6 @@ export function humanize(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 0 || err.status >= 502) {
       return "Сервер недоступен, попробуйте чуть позже";
-    }
-    if (err.message.includes("yourself")) {
-      return "Нельзя играть с самим собой — отправьте код другу";
     }
     if (messages[err.message]) {
       return messages[err.message];

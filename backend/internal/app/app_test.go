@@ -3,10 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"testing"
 	"time"
 	"zvrtsh/internal/model"
-	invitefake "zvrtsh/internal/repo/invite_repo/fake"
 	sessionfake "zvrtsh/internal/repo/session_repo/fake"
 	userfake "zvrtsh/internal/repo/user_repo/fake"
 )
@@ -17,14 +18,19 @@ func newTestApp(t *testing.T) *app {
 	t.Cleanup(cancel)
 
 	cfg := Config{InviteTTL: time.Hour, SessionTTL: time.Hour}
-	return New(ctx, cfg, userfake.New(), invitefake.New(), sessionfake.New()).(*app)
+	a := New(ctx, cfg, userfake.New(), sessionfake.New()).(*app)
+	// the same deal in every test run
+	seed := uint64(0)
+	a.newRand = func() *rand.Rand {
+		seed++
+		return rand.New(rand.NewPCG(seed, seed))
+	}
+	return a
 }
 
 // setClock makes the app think that it is now + shift.
 func setClock(a *app, now time.Time, shift time.Duration) {
-	clock := func() time.Time { return now.Add(shift) }
-	a.sessionAppImpl.now = clock
-	a.userAppImpl.now = clock
+	a.sessionAppImpl.now = func() time.Time { return now.Add(shift) }
 }
 
 func register(t *testing.T, a App, name string) {
@@ -34,22 +40,39 @@ func register(t *testing.T, a App, name string) {
 	}
 }
 
-// newGame registers alice and bob and starts a session created by alice.
+// startGame hosts a session by the first player, lets the others join it and
+// starts it. The fakes do not check users, so registration is not needed.
+func startGame(t *testing.T, a *app, steps int, players ...string) string {
+	t.Helper()
+	ctx := context.Background()
+	lobby, err := a.CreateInvite(ctx, players[0], steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range players[1:] {
+		if _, err = a.JoinSession(ctx, p, lobby.Invite.Code); err != nil {
+			t.Fatalf("%s joins: %v", p, err)
+		}
+	}
+	if _, err = a.StartSession(ctx, lobby.Id, players[0]); err != nil {
+		t.Fatal(err)
+	}
+	return lobby.Id
+}
+
+// newGame starts a session of alice and bobby hosted by alice.
 func newGame(t *testing.T, steps int) (*app, string) {
 	t.Helper()
 	a := newTestApp(t)
-	register(t, a, "alice")
-	register(t, a, "bobby")
+	return a, startGame(t, a, steps, "alice", "bobby")
+}
 
-	invite, err := a.CreateInvite(context.Background(), "bobby", steps)
-	if err != nil {
-		t.Fatal(err)
+func names(n int) []string {
+	result := make([]string, n)
+	for i := range result {
+		result[i] = fmt.Sprintf("player%d", i+1)
 	}
-	session, err := a.CreateSession(context.Background(), "alice", invite.Code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a, session.Id
+	return result
 }
 
 func TestRegisterAndLogin(t *testing.T) {
@@ -97,105 +120,248 @@ func TestRegisterAndLogin(t *testing.T) {
 	}
 }
 
-func TestInvite(t *testing.T) {
+func TestLobby(t *testing.T) {
 	ctx := context.Background()
 	a := newTestApp(t)
-	register(t, a, "alice")
-	register(t, a, "bobby")
 
 	for _, steps := range []int{0, -1, maxStepsAmount + 1} {
-		if _, err := a.CreateInvite(ctx, "bobby", steps); !errors.Is(err, model.ErrValidation) {
+		if _, err := a.CreateInvite(ctx, "host", steps); !errors.Is(err, model.ErrValidation) {
 			t.Errorf("invite with %d steps: got %v", steps, err)
 		}
 	}
 
-	invite, _ := a.CreateInvite(ctx, "bobby", 2)
-	if _, err := a.CreateSession(ctx, "bobby", invite.Code); !errors.Is(err, model.ErrValidation) {
-		t.Errorf("session with yourself: got %v", err)
-	}
-	// the invite was spent by the failed attempt
-	if _, err := a.CreateSession(ctx, "alice", invite.Code); !errors.Is(err, model.ErrNoInviteCode) {
-		t.Errorf("spent invite: got %v", err)
-	}
-
-	// the session gets the number of steps chosen by the inviter
-	invite, _ = a.CreateInvite(ctx, "bobby", 7)
-	session, err := a.CreateSession(ctx, "alice", invite.Code)
+	lobby, err := a.CreateInvite(ctx, "host", 7)
 	if err != nil {
-		t.Fatalf("create session: %v", err)
+		t.Fatal(err)
 	}
-	if n := len(session.Sheets[0].Steps); n != 7 {
-		t.Errorf("session has %d steps, want 7", n)
+	if lobby.Status() != model.StatusLobby || lobby.Host() != "host" || lobby.StepsAmount != 7 || lobby.Invite == nil {
+		t.Fatalf("new lobby: %+v", lobby)
 	}
-	if _, err = a.CreateSession(ctx, "alice", invite.Code); !errors.Is(err, model.ErrNoInviteCode) {
-		t.Errorf("invite reuse: got %v", err)
+	code := lobby.Invite.Code
+	id := lobby.Id
+
+	// nothing can be done in the lobby but joining and starting
+	if _, err = a.StartSession(ctx, id, "host"); !errors.Is(err, model.ErrTooFewPlayers) {
+		t.Errorf("start alone: got %v", err)
+	}
+	if err = a.MakeQuestion(ctx, id, "host", 0, "h", "o"); !errors.Is(err, model.ErrSessionNotStarted) {
+		t.Errorf("question in the lobby: got %v", err)
+	}
+	if _, err = a.VoteFinish(ctx, id, "host", true); !errors.Is(err, model.ErrSessionNotStarted) {
+		t.Errorf("finish vote in the lobby: got %v", err)
+	}
+	if _, err = a.JoinSession(ctx, "guest", "wrong code"); !errors.Is(err, model.ErrNoInviteCode) {
+		t.Errorf("wrong code: got %v", err)
 	}
 
-	// a new invite replaces the previous one
-	first, _ := a.CreateInvite(ctx, "bobby", 2)
-	second, _ := a.CreateInvite(ctx, "bobby", 2)
-	if _, err = a.CreateSession(ctx, "alice", first.Code); !errors.Is(err, model.ErrNoInviteCode) {
-		t.Errorf("replaced invite: got %v", err)
+	players := names(model.MaxPlayers)
+	for i, p := range players[1:] {
+		s, err := a.JoinSession(ctx, p, code)
+		if err != nil {
+			t.Fatalf("%s joins: %v", p, err)
+		}
+		if len(s.Players) != i+2 || s.Players[i+1].Name != p {
+			t.Fatalf("players after %s joins: %v", p, s.PlayerNames())
+		}
 	}
-	if _, err = a.CreateSession(ctx, "alice", second.Code); err != nil {
-		t.Errorf("actual invite: %v", err)
+	// joining again only leads back to the session, the host may use the code too
+	for _, p := range []string{players[3], "host"} {
+		if s, err := a.JoinSession(ctx, p, code); err != nil || len(s.Players) != model.MaxPlayers {
+			t.Errorf("%s joins again: %d players, %v", p, len(s.Players), err)
+		}
+	}
+	if _, err = a.JoinSession(ctx, "ninth", code); !errors.Is(err, model.ErrSessionFull) {
+		t.Errorf("ninth player: got %v", err)
 	}
 
-	// a cancelled invite cannot be used; cancelling nothing is fine
-	invite, _ = a.CreateInvite(ctx, "bobby", 2)
-	for i := 0; i < 2; i++ {
-		if err = a.DeleteInvite(ctx, "bobby"); err != nil {
+	if _, err = a.StartSession(ctx, id, players[1]); !errors.Is(err, model.ErrNotHost) {
+		t.Errorf("start by a guest: got %v", err)
+	}
+	if _, err = a.StartSession(ctx, id, "stranger"); !errors.Is(err, model.ErrNotParticipant) {
+		t.Errorf("start by a stranger: got %v", err)
+	}
+	s, err := a.StartSession(ctx, id, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status() != model.StatusInWork || len(s.Sheets) != model.MaxPlayers || s.Invite != nil {
+		t.Errorf("started session: status %v, %d sheets, invite %v", s.Status(), len(s.Sheets), s.Invite)
+	}
+	if _, err = a.StartSession(ctx, id, "host"); !errors.Is(err, model.ErrSessionStarted) {
+		t.Errorf("second start: got %v", err)
+	}
+	// the code stops working
+	if _, err = a.JoinSession(ctx, "late", code); !errors.Is(err, model.ErrNoInviteCode) {
+		t.Errorf("join a started session: got %v", err)
+	}
+}
+
+func TestCancelLobby(t *testing.T) {
+	ctx := context.Background()
+	a := newTestApp(t)
+
+	guest, stop := a.SubscribeSessions(ctx, "guest")
+	defer stop()
+
+	first, _ := a.CreateInvite(ctx, "host", 2)
+	if _, err := a.JoinSession(ctx, "guest", first.Invite.Code); err != nil {
+		t.Fatal(err)
+	}
+	<-guest // the guest has joined
+
+	// a new invite cancels the previous lobby, its players are told about it
+	second, _ := a.CreateInvite(ctx, "host", 3)
+	select {
+	case e := <-guest:
+		if !e.Deleted || e.Session.Id != first.Id {
+			t.Errorf("event about the cancelled lobby: %+v", e)
+		}
+	default:
+		t.Error("the guest is not told about the cancelled lobby")
+	}
+	if _, err := a.GetSession(ctx, first.Id, "guest"); !errors.Is(err, model.ErrNoSession) {
+		t.Errorf("cancelled lobby: got %v", err)
+	}
+	if _, err := a.JoinSession(ctx, "guest", first.Invite.Code); !errors.Is(err, model.ErrNoInviteCode) {
+		t.Errorf("code of the cancelled lobby: got %v", err)
+	}
+
+	// cancelling twice is fine
+	for range 2 {
+		if err := a.DeleteInvite(ctx, "host"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = a.CreateSession(ctx, "alice", invite.Code); !errors.Is(err, model.ErrNoInviteCode) {
-		t.Errorf("cancelled invite: got %v", err)
+	if _, err := a.GetSession(ctx, second.Id, "host"); !errors.Is(err, model.ErrNoSession) {
+		t.Errorf("lobby after DeleteInvite: got %v", err)
 	}
+
+	// a started session is not cancelled, neither are the lobbies of others
+	id := startGame(t, a, 1, "host", "guest")
+	other, _ := a.CreateInvite(ctx, "guest", 1)
+	if err := a.DeleteInvite(ctx, "host"); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{id, other.Id} {
+		if _, err := a.GetSession(ctx, sid, "guest"); err != nil {
+			t.Errorf("session %s is cancelled: %v", sid, err)
+		}
+	}
+}
+
+func TestInviteExpiration(t *testing.T) {
+	ctx := context.Background()
+	a := newTestApp(t)
+	now := time.Now().UTC()
+	setClock(a, now, 0)
+
+	lobby, _ := a.CreateInvite(ctx, "alice", 1)
+	if want := now.Add(time.Hour); !lobby.Invite.ExpiresAt.Equal(want) {
+		t.Errorf("invite expires at %v, want %v", lobby.Invite.ExpiresAt, want)
+	}
+
+	setClock(a, now, time.Hour)
+	if _, err := a.JoinSession(ctx, "bobby", lobby.Invite.Code); !errors.Is(err, model.ErrNoInviteCode) {
+		t.Errorf("expired invite: got %v", err)
+	}
+}
+
+func TestDeal(t *testing.T) {
+	for n := model.MinPlayers; n <= model.MaxPlayers; n++ {
+		deals := map[string]bool{}
+		for seed := range uint64(50) {
+			sheets := model.Deal(n, 4, rand.New(rand.NewPCG(seed, seed)))
+			deals[fmt.Sprint(sheets)] = true
+			if len(sheets) != n {
+				t.Fatalf("%d players: %d sheets", n, len(sheets))
+			}
+
+			for step := range 4 {
+				askers, answerers := map[int]bool{}, map[int]bool{}
+				for i, sheet := range sheets {
+					s := sheet.Steps[step]
+					askers[s.Asker], answerers[s.Answerer] = true, true
+					if step == 0 && s.Asker != i {
+						t.Errorf("%d players: sheet %d starts with player %d", n, i, s.Asker)
+					}
+					// the sheet goes to somebody else for the answer and stays with
+					// the one who has answered for the next question
+					if s.Asker == s.Answerer {
+						t.Errorf("%d players, seed %d: sheet %d stays with its asker on step %d", n, seed, i, step)
+					}
+					if step > 0 && s.Asker != sheet.Steps[step-1].Answerer {
+						t.Errorf("%d players, seed %d: sheet %d is passed after the answer of step %d", n, seed, i, step-1)
+					}
+				}
+				// everybody writes exactly one question and one answer
+				if len(askers) != n || len(answerers) != n {
+					t.Errorf("%d players: step %d has askers %v, answerers %v", n, step, askers, answerers)
+				}
+			}
+		}
+		// with two players the sheets are just swapped, with more the deal is random
+		if want := n > 2; (len(deals) > 1) != want {
+			t.Errorf("%d players: %d different deals", n, len(deals))
+		}
+	}
+}
+
+// playAll makes all moves of the session, every player asks and then answers
+// on every step, and returns the session.
+func playAll(t *testing.T, a *app, id string, players []string) model.Session {
+	t.Helper()
+	ctx := context.Background()
+	s, _ := a.GetSession(ctx, id, players[0])
+	for step := range s.StepsAmount {
+		for _, p := range players {
+			if err := a.MakeQuestion(ctx, id, p, step, p+" hidden", p+" open"); err != nil {
+				t.Fatalf("step %d: %s makes question: %v", step, p, err)
+			}
+		}
+		for _, p := range players {
+			s, _ = a.GetSession(ctx, id, p)
+			me, _ := s.PlayerIdx(p)
+			asker := players[s.Sheets[s.AnswerSheetIdx(step, me)].Steps[step].Asker]
+
+			open, err := a.GetQuestionToAnswer(ctx, id, p, step)
+			if err != nil || open != asker+" open" {
+				t.Fatalf("step %d: %s gets question %q, %v", step, p, open, err)
+			}
+			if err = a.MakeAnswer(ctx, id, p, step, p+" answer"); err != nil {
+				t.Fatalf("step %d: %s makes answer: %v", step, p, err)
+			}
+		}
+	}
+	s, _ = a.GetSession(ctx, id, players[0])
+	return s
 }
 
 func TestFullGame(t *testing.T) {
 	ctx := context.Background()
-	const steps = 3
-	a, id := newGame(t, steps)
+	for _, n := range []int{2, 5, model.MaxPlayers} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			a := newTestApp(t)
+			players := names(n)
+			id := startGame(t, a, 3, players...)
 
-	if _, err := a.GetResults(ctx, id, "alice"); !errors.Is(err, model.ErrSessionUndone) {
-		t.Fatalf("results of a new session: got %v", err)
-	}
+			if _, err := a.GetResults(ctx, id, players[0]); !errors.Is(err, model.ErrSessionUndone) {
+				t.Fatalf("results of a new session: got %v", err)
+			}
+			playAll(t, a, id, players)
 
-	for step := 0; step < steps; step++ {
-		for _, player := range []string{"alice", "bobby"} {
-			if err := a.MakeQuestion(ctx, id, player, step, player+" hidden", player+" open"); err != nil {
-				t.Fatalf("step %d: %s makes question: %v", step, player, err)
+			session, err := a.GetResults(ctx, id, players[1])
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		for _, c := range []struct{ player, opponent string }{{"alice", "bobby"}, {"bobby", "alice"}} {
-			open, err := a.GetOpponentQuestion(ctx, id, c.player, step)
-			if err != nil || open != c.opponent+" open" {
-				t.Fatalf("step %d: %s gets question %q, %v", step, c.player, open, err)
+			for i, sheet := range session.Sheets {
+				for step, s := range sheet.Steps {
+					asker, answerer := players[s.Asker], players[s.Answerer]
+					if s.OpenQuestion != asker+" open" || s.HiddenQuestion != asker+" hidden" || s.Answer != answerer+" answer" {
+						t.Errorf("sheet %d, step %d: %+v", i, step, s)
+					}
+				}
 			}
-			if err = a.MakeAnswer(ctx, id, c.player, step, c.player+" answer"); err != nil {
-				t.Fatalf("step %d: %s makes answer: %v", step, c.player, err)
-			}
-		}
-	}
-
-	session, err := a.GetResults(ctx, id, "bobby")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session.Status() != model.StatusDone {
-		t.Fatal("session is not done")
-	}
-	// the sheet of alice has questions of alice and answers of bob (even steps)
-	// and the opposite on odd steps
-	for step, s := range session.Sheets[0].Steps {
-		wantQ, wantA := "alice", "bobby"
-		if step%2 == 1 {
-			wantQ, wantA = "bobby", "alice"
-		}
-		if s.OpenQuestion != wantQ+" open" || s.HiddenQuestion != wantQ+" hidden" || s.Answer != wantA+" answer" {
-			t.Errorf("alice's sheet, step %d: %+v", step, s)
-		}
+		})
 	}
 }
 
@@ -203,11 +369,11 @@ func TestStepOrderAndAccess(t *testing.T) {
 	ctx := context.Background()
 	a, id := newGame(t, 2)
 
-	// nobody can answer before the opponent has asked
+	// nobody can answer before the question is asked
 	if err := a.MakeAnswer(ctx, id, "bobby", 0, "x"); !errors.Is(err, model.ErrStepUnavailable) {
 		t.Errorf("answer without question: got %v", err)
 	}
-	if _, err := a.GetOpponentQuestion(ctx, id, "bobby", 0); !errors.Is(err, model.ErrStepUnavailable) {
+	if _, err := a.GetQuestionToAnswer(ctx, id, "bobby", 0); !errors.Is(err, model.ErrStepUnavailable) {
 		t.Errorf("read missing question: got %v", err)
 	}
 	// step 1 is closed until step 0 is answered
@@ -220,6 +386,13 @@ func TestStepOrderAndAccess(t *testing.T) {
 	}
 	if err := a.MakeQuestion(ctx, id, "alice", 0, "h", "o"); !errors.Is(err, model.ErrStepUnavailable) {
 		t.Errorf("rewrite of the question: got %v", err)
+	}
+	// the sheets are passed on when everybody has written the question
+	if err := a.MakeAnswer(ctx, id, "bobby", 0, "x"); !errors.Is(err, model.ErrStepUnavailable) {
+		t.Errorf("answer before all questions: got %v", err)
+	}
+	if err := a.MakeQuestion(ctx, id, "bobby", 0, "h", "o"); err != nil {
+		t.Fatal(err)
 	}
 	if err := a.MakeAnswer(ctx, id, "bobby", 0, "x"); err != nil {
 		t.Fatal(err)
@@ -240,7 +413,6 @@ func TestStepOrderAndAccess(t *testing.T) {
 			t.Errorf("answer %q: got %v", text, err)
 		}
 	}
-	register(t, a, "carol")
 	if _, err := a.GetSession(ctx, id, "carol"); !errors.Is(err, model.ErrNotParticipant) {
 		t.Errorf("stranger reads the session: got %v", err)
 	}
@@ -258,6 +430,7 @@ func TestReturnedSessionIsACopy(t *testing.T) {
 
 	session, _ := a.GetSession(ctx, id, "alice")
 	session.Sheets[0].Steps[0].OpenQuestion = "tampered"
+	session.Players[0].Name = "tampered"
 
 	if err := a.MakeQuestion(ctx, id, "alice", 0, "h", "o"); err != nil {
 		t.Errorf("stored session was changed through the returned copy: %v", err)
@@ -294,75 +467,44 @@ func TestPurgeExpiredSessions(t *testing.T) {
 	}
 }
 
-func TestInviteExpiration(t *testing.T) {
-	ctx := context.Background()
-	a := newTestApp(t)
-	register(t, a, "alice")
-	register(t, a, "bobby")
-	now := time.Now().UTC()
-	setClock(a, now, 0)
-
-	stale, _ := a.CreateInvite(ctx, "alice", 1)
-	if want := now.Add(time.Hour); !stale.ExpiresAt.Equal(want) {
-		t.Errorf("invite expires at %v, want %v", stale.ExpiresAt, want)
-	}
-
-	// an expired invite is rejected even before it is purged
-	setClock(a, now, time.Hour)
-	if _, err := a.CreateSession(ctx, "bobby", stale.Code); !errors.Is(err, model.ErrNoInviteCode) {
-		t.Errorf("expired invite: got %v", err)
-	}
-
-	setClock(a, now, 0)
-	_, _ = a.CreateInvite(ctx, "alice", 1)
-	_, _ = a.CreateInvite(ctx, "bobby", 1)
-	invites := a.userAppImpl.invites.(*invitefake.InviteRepo)
-	setClock(a, now, time.Hour)
-	if err := a.purgeExpiredInvites(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if n := invites.Len(); n != 0 {
-		t.Errorf("%d invites left after purge", n)
-	}
-}
-
 func TestProgressAndList(t *testing.T) {
 	ctx := context.Background()
-	a, id := newGame(t, 2)
+	a := newTestApp(t)
+	players := []string{"alice", "bobby", "carol"}
+	id := startGame(t, a, 2, players...)
 
-	if err := a.MakeQuestion(ctx, id, "alice", 0, "h", "o"); err != nil {
-		t.Fatal(err)
+	for _, p := range players {
+		if err := a.MakeQuestion(ctx, id, p, 0, "h", "o"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := a.MakeAnswer(ctx, id, "bobby", 0, "a"); err != nil {
-		t.Fatal(err)
-	}
-
 	session, _ := a.GetSession(ctx, id, "alice")
-	alice, _ := session.PlayerIdx("alice")
-	bobby, _ := session.PlayerIdx("bobby")
+	answerer := session.Sheets[0].Steps[0].Answerer // the one who answers alice
+	if err := a.MakeAnswer(ctx, id, players[answerer], 0, "a"); err != nil {
+		t.Fatal(err)
+	}
+	session, _ = a.GetSession(ctx, id, "alice")
 
-	want := model.StepProgress{MyQuestion: true, OpponentAnswer: true}
-	if got := session.Progress(alice)[0]; got != want {
-		t.Errorf("alice's progress: %+v, want %+v", got, want)
+	if got := session.Progress(0)[0]; !got.MyQuestion || got.QuestionsWritten != 3 || got.AnswersWritten != 1 {
+		t.Errorf("alice's progress: %+v", got)
 	}
-	want = model.StepProgress{OpponentQuestion: true, MyAnswer: true}
-	if got := session.Progress(bobby)[0]; got != want {
-		t.Errorf("bobby's progress: %+v, want %+v", got, want)
+	if got := session.Progress(answerer)[0]; !got.MyAnswer || !got.AnswerSheetReady || got.AnswerSheetFrom != 0 {
+		t.Errorf("progress of %s: %+v", players[answerer], got)
 	}
-	if got := session.Progress(alice)[1]; got != (model.StepProgress{}) {
-		t.Errorf("progress of an untouched step: %+v", got)
+	// the one who has answered on the sheet of alice writes the next question
+	// on it at once, the others still answer
+	if err := a.MakeQuestion(ctx, id, players[answerer], 1, "h", "o"); err != nil {
+		t.Errorf("question on the answered sheet: %v", err)
+	}
+	other := 3 - answerer // neither alice nor the answerer
+	if err := a.MakeQuestion(ctx, id, players[other], 1, "h", "o"); !errors.Is(err, model.ErrStepUnavailable) {
+		t.Errorf("question before the answer: got %v", err)
 	}
 
 	// the second session of bobby becomes the most recent one
-	register(t, a, "carol")
-	invite, _ := a.CreateInvite(ctx, "carol", 1)
-	second, err := a.CreateSession(ctx, "bobby", invite.Code)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	second := startGame(t, a, 1, "dave", "bobby")
 	list, _ := a.ListSessions(ctx, "bobby")
-	if len(list) != 2 || list[0].Id != second.Id || list[1].Id != id {
+	if len(list) != 2 || list[0].Id != second || list[1].Id != id {
 		t.Errorf("sessions of bobby: %+v", list)
 	}
 	if list, _ = a.ListSessions(ctx, "alice"); len(list) != 1 {
@@ -376,68 +518,68 @@ func TestProgressAndList(t *testing.T) {
 func TestSubscribeSessions(t *testing.T) {
 	ctx := context.Background()
 	a := newTestApp(t)
-	for _, name := range []string{"alice", "bobby", "carol"} {
-		register(t, a, name)
-	}
 
-	alice, stopAlice := a.SubscribeSessions(ctx, "alice")
-	defer stopAlice()
-	bobby, stopBobby := a.SubscribeSessions(ctx, "bobby")
-	defer stopBobby()
-	carol, stopCarol := a.SubscribeSessions(ctx, "carol")
-	defer stopCarol()
-
-	invite, _ := a.CreateInvite(ctx, "bobby", 1)
-	session, err := a.CreateSession(ctx, "alice", invite.Code)
-	if err != nil {
-		t.Fatal(err)
+	subscribe := func(name string) <-chan model.SessionEvent {
+		ch, stop := a.SubscribeSessions(ctx, name)
+		t.Cleanup(stop)
+		return ch
 	}
-	if err = a.MakeQuestion(ctx, session.Id, "alice", 0, "h", "o"); err != nil {
-		t.Fatal(err)
+	alice, bobby, carol := subscribe("alice"), subscribe("bobby"), subscribe("carol")
+
+	lobby, _ := a.CreateInvite(ctx, "alice", 1) // version 1
+	if _, err := a.JoinSession(ctx, "bobby", lobby.Invite.Code); err != nil {
+		t.Fatal(err) // version 2
+	}
+	if _, err := a.StartSession(ctx, lobby.Id, "alice"); err != nil {
+		t.Fatal(err) // version 3
+	}
+	if err := a.MakeQuestion(ctx, lobby.Id, "alice", 0, "h", "o"); err != nil {
+		t.Fatal(err) // version 4
 	}
 	// a rejected action changes nothing and sends nothing
-	if err = a.MakeQuestion(ctx, session.Id, "alice", 0, "h", "o"); err == nil {
+	if err := a.MakeQuestion(ctx, lobby.Id, "alice", 0, "h", "o"); err == nil {
 		t.Fatal("question was written twice")
 	}
 
-	for name, ch := range map[string]<-chan model.Session{"alice": alice, "bobby": bobby} {
-		for wantVersion := int64(1); wantVersion <= 2; wantVersion++ {
+	expect := func(name string, ch <-chan model.SessionEvent, versions ...int64) {
+		for _, want := range versions {
 			select {
-			case s := <-ch:
-				if s.Id != session.Id || s.Version != wantVersion {
-					t.Errorf("%s got session %s of version %d, want version %d", name, s.Id, s.Version, wantVersion)
+			case e := <-ch:
+				if e.Session.Id != lobby.Id || e.Session.Version != want || e.Deleted {
+					t.Errorf("%s got session %s of version %d, want version %d", name, e.Session.Id, e.Session.Version, want)
 				}
 			default:
-				t.Fatalf("%s did not get the update of version %d", name, wantVersion)
+				t.Fatalf("%s did not get the update of version %d", name, want)
 			}
 		}
 		select {
-		case s := <-ch:
-			t.Errorf("%s got an unexpected update of version %d", name, s.Version)
+		case e := <-ch:
+			t.Errorf("%s got an unexpected update of version %d", name, e.Session.Version)
 		default:
 		}
 	}
-	select {
-	case <-carol:
-		t.Error("a stranger got an update of the session")
-	default:
-	}
+	expect("alice", alice, 1, 2, 3, 4)
+	expect("bobby", bobby, 2, 3, 4) // bobby is a player since version 2
+	expect("carol", carol)
+}
 
-	// after unsubscribe the channel is closed
-	stopAlice()
-	if _, ok := <-alice; ok {
+func TestUnsubscribe(t *testing.T) {
+	a := newTestApp(t)
+	ch, stop := a.SubscribeSessions(context.Background(), "alice")
+	stop()
+	if _, ok := <-ch; ok {
 		t.Error("channel is open after unsubscribe")
 	}
-	stopAlice() // second call is harmless
+	stop() // second call is harmless
 }
 
 func TestSlowSubscriberIsDropped(t *testing.T) {
 	h := newHub()
 	ch := h.subscribe("alice")
-	session := model.Session{Sheets: [2]model.Sheet{{Owner: "alice"}, {Owner: "bobby"}}}
+	event := model.SessionEvent{Session: model.Session{Players: []model.Player{{Name: "alice"}, {Name: "bobby"}}}}
 
-	for i := 0; i < subscriptionBuffer+1; i++ {
-		h.publish(session) // must not block
+	for range subscriptionBuffer + 1 {
+		h.publish(event) // must not block
 	}
 	n := 0
 	for range ch {

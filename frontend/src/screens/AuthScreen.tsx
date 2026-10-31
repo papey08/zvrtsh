@@ -56,10 +56,10 @@ export function AuthScreen({ invited }: { invited: boolean }) {
         </h1>
         <ol className="rules">
           <li>
-            <b>Напишите вопрос</b> и загните лист — соперник увидит только его начало, например «Что?»
+            <b>Напишите вопрос</b> и загните лист — следующий игрок увидит только его начало, например «Что?»
           </li>
           <li>
-            <b>Ответьте наугад</b> на начало чужого вопроса и загните ответ
+            <b>Ответьте наугад</b> на начало чужого вопроса из перемешанных листов и загните ответ
           </li>
           <li>
             <b>Разверните листы</b>, когда кончатся шаги, и прочитайте, что получилось
@@ -70,7 +70,7 @@ export function AuthScreen({ invited }: { invited: boolean }) {
 
       <section className="auth__panel">
         <form className="card auth__card" onSubmit={submit} noValidate>
-          {invited && <p className="auth__invited">Вас пригласили в партию — войдите, и игра начнётся</p>}
+          {invited && <p className="auth__invited">Вас пригласили в партию — войдите, чтобы присоединиться</p>}
           <div className="tabs" role="tablist">
             <button
               type="button"

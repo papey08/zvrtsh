@@ -32,7 +32,7 @@ var defaultEventsConfig = eventsConfig{
 	pingInterval: 25 * time.Second,
 }
 
-// eventsHandler streams updated sessions of the user over a WebSocket until the
+// eventsHandler streams changes of the sessions of the user over a WebSocket until the
 // client leaves or serverCtx is done.
 func eventsHandler(serverCtx context.Context, a app.App, cfg eventsConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -52,7 +52,7 @@ func eventsHandler(serverCtx context.Context, a app.App, cfg eventsConfig) gin.H
 		}
 
 		// subscribe before ready: everything after it reaches the client
-		sessions, unsubscribe := a.SubscribeSessions(c.Request.Context(), userName)
+		events, unsubscribe := a.SubscribeSessions(c.Request.Context(), userName)
 		defer unsubscribe()
 
 		// the client sends nothing more; reading in background handles pings and
@@ -69,13 +69,12 @@ func eventsHandler(serverCtx context.Context, a app.App, cfg eventsConfig) gin.H
 			select {
 			case <-ctx.Done():
 				return
-			case session, ok := <-sessions:
+			case event, ok := <-events:
 				if !ok {
 					_ = conn.Close(websocket.StatusTryAgainLater, "too many events, reconnect")
 					return
 				}
-				view := toSession(session, userName)
-				if err = writeMessage(ctx, conn, api.EventsServerMessage{Type: api.SessionUpdated, Session: &view}); err != nil {
+				if err = writeMessage(ctx, conn, toEventMessage(event, userName)); err != nil {
 					return
 				}
 			case <-ticker.C:
@@ -131,6 +130,14 @@ func closeOnAuthError(conn *websocket.Conn, err error) {
 	}
 	log.Printf("internal error: websocket authentication: %v", err)
 	_ = conn.Close(websocket.StatusInternalError, "sorry, something wrong with the server")
+}
+
+func toEventMessage(event model.SessionEvent, userName string) api.EventsServerMessage {
+	if event.Deleted {
+		return api.EventsServerMessage{Type: api.SessionDeleted, SessionId: &event.Session.Id}
+	}
+	view := toSession(event.Session, userName)
+	return api.EventsServerMessage{Type: api.SessionUpdated, Session: &view}
 }
 
 func writeMessage(ctx context.Context, conn *websocket.Conn, msg api.EventsServerMessage) error {

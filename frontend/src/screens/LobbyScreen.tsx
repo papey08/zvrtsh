@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, call, humanize, type Invite, type Session } from "../api/client";
-import { Avatar, Spinner } from "../components/ui";
+import { api, call, humanize, type Session } from "../api/client";
+import { InviteCode, inviteLink, Roster, useCopy } from "../components/Lobby";
+import { Avatars, Spinner } from "../components/ui";
 import { useMe } from "../lib/auth";
-import {
-  badgeOf,
-  copyText,
-  creatorOf,
-  myDoneActions,
-  opponentOf,
-  plural,
-  timeAgo,
-} from "../lib/game";
+import { badgeOf, joinNames, MAX_PLAYERS, MAX_STEPS, myDoneActions, othersOf, plural, timeAgo } from "../lib/game";
 import { newer, useConnection, useSessionEvents } from "../lib/events";
 import { inviteCodeFrom, links, navigate } from "../lib/router";
 import { useToast } from "../lib/toast";
@@ -33,25 +26,24 @@ export function LobbyScreen({ initialCode }: { initialCode?: string }) {
   const me = useMe();
   const toast = useToast();
   const [sessions, setSessions] = useState<Session[] | null>(null);
-  const [invite, setInvite] = useStoredInvite(me);
   const { status, syncKey } = useConnection();
-  const known = useRef<Set<string> | null>(null); // null until the first load
+  const statuses = useRef(new Map<string, Session["status"]>());
 
   /** Takes sessions from the server: the whole list (replace) or single updates. */
   const receive = useCallback(
     (incoming: Session[], replace: boolean) => {
-      const seen = known.current;
-      // somebody has used our invite: jump straight into the new game
-      const fresh = seen && invite && incoming.find((s) => !seen.has(s.id) && creatorOf(s) !== me);
-      known.current = new Set([...(replace ? [] : (seen ?? [])), ...incoming.map((s) => s.id)]);
+      // the host has started a session we wait in: jump straight into it
+      const started = incoming.find(
+        (s) => statuses.current.get(s.id) === "lobby" && s.status === "in_work" && s.host !== me,
+      );
+      for (const s of incoming) statuses.current.set(s.id, s.status);
       setSessions((list) => mergeSessions(list ?? [], incoming, replace));
-      if (fresh) {
-        setInvite(null);
-        toast(`${opponentOf(fresh, me)} принимает приглашение!`, "success");
-        navigate(links.game(fresh.id));
+      if (started) {
+        toast(`${started.host} начинает партию!`, "success");
+        navigate(links.game(started.id));
       }
     },
-    [me, invite, setInvite, toast],
+    [me, toast],
   );
 
   const load = useCallback(async () => receive(await call(api.GET("/sessions")), true), [receive]);
@@ -60,12 +52,18 @@ export function LobbyScreen({ initialCode }: { initialCode?: string }) {
   useEffect(() => {
     load().catch(() => {});
   }, [load, syncKey]);
-  useSessionEvents((session) => receive([session], false));
+  useSessionEvents(
+    (session) => receive([session], false),
+    (id) => setSessions((list) => list?.filter((s) => s.id !== id) ?? null),
+  );
   // without the socket the lobby falls back to polling
   usePolling(load, 5000, status === "offline");
 
-  const active = sessions?.filter((s) => s.status !== "done") ?? [];
+  // the session the player has created and still waits in
+  const hosted = sessions?.find((s) => s.status === "lobby" && s.host === me) ?? null;
+  const active = sessions?.filter((s) => s.status !== "done" && s !== hosted) ?? [];
   const finished = sessions?.filter((s) => s.status === "done") ?? [];
+  const count = (sessions?.length ?? 0) - (hosted ? 1 : 0);
 
   return (
     <div className="lobby">
@@ -73,31 +71,31 @@ export function LobbyScreen({ initialCode }: { initialCode?: string }) {
         <h1 className="page-title">
           Привет, <span className="hand hand--yellow">{me}</span>
         </h1>
-        <p className="page-subtitle">Позовите соперника по коду или примите его приглашение.</p>
+        <p className="page-subtitle">Соберите компанию до {MAX_PLAYERS} человек по коду или присоединитесь к чужой партии.</p>
       </section>
 
       <div className="lobby__actions">
-        <InviteCard invite={invite} onInvite={setInvite} />
+        <InviteCard lobby={hosted} loading={sessions === null} onChanged={load} />
         <JoinCard initialCode={initialCode} />
       </div>
 
       <section className="lobby__games">
         <h2 className="section-title">
           Мои партии
-          {sessions && sessions.length > 0 && <span className="section-title__count">{sessions.length}</span>}
+          {count > 0 && <span className="section-title__count">{count}</span>}
         </h2>
         {sessions === null ? (
           <div className="empty">
             <Spinner />
           </div>
-        ) : sessions.length === 0 ? (
+        ) : count === 0 ? (
           <div className="empty">
             <div className="empty__sheet" aria-hidden="true">
               <span />
               <span />
               <span />
             </div>
-            <p>Партий пока нет. Создайте партию и отправьте код другу.</p>
+            <p>Партий пока нет. Создайте партию и отправьте код друзьям.</p>
           </div>
         ) : (
           <>
@@ -128,87 +126,84 @@ export function LobbyScreen({ initialCode }: { initialCode?: string }) {
 
 const STEP_PRESETS = [3, 5, 7, 10];
 
-function InviteCard({ invite, onInvite }: { invite: Invite | null; onInvite(invite: Invite | null): void }) {
+type InviteCardProps = { lobby: Session | null; loading: boolean; onChanged(): Promise<void> };
+
+function InviteCard({ lobby, loading, onChanged }: InviteCardProps) {
+  const me = useMe();
   const toast = useToast();
+  const copy = useCopy();
   const [steps, setSteps] = useState(5);
   const [busy, setBusy] = useState(false);
-  const left = useCountdown(invite?.expires_at);
 
-  useEffect(() => {
-    if (invite && left <= 0) onInvite(null);
-  }, [invite, left, onInvite]);
+  async function act(request: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await request();
+      await onChanged();
+    } catch (err) {
+      toast(humanize(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  async function create(e: FormEvent) {
+  const create = (e: FormEvent) => {
     e.preventDefault();
+    void act(() => call(api.POST("/invites", { body: { steps_amount: steps } })));
+  };
+  // the session is cancelled on the server, so the old code stops working
+  const startOver = () => act(() => call(api.DELETE("/invites")));
+
+  async function start(id: string) {
     setBusy(true);
     try {
-      onInvite(await call(api.POST("/invites", { body: { steps_amount: steps } })));
+      await call(api.POST("/sessions/{session_id}/start", { params: { path: { session_id: id } } }));
+      navigate(links.game(id));
     } catch (err) {
       toast(humanize(err), "error");
-    } finally {
       setBusy(false);
     }
   }
 
-  // the invite is cancelled on the server, so the old code stops working
-  async function startOver() {
-    setBusy(true);
-    try {
-      await call(api.DELETE("/invites"));
-      onInvite(null);
-    } catch (err) {
-      toast(humanize(err), "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copy(text: string, done: string) {
-    const ok = await copyText(text);
-    toast(ok ? done : "Не получилось скопировать", ok ? "success" : "error");
-  }
-
-  const link = invite ? `${window.location.origin}${window.location.pathname}${links.join(invite.invite_code)}` : "";
+  const enough = lobby !== null && lobby.players.length > 1;
 
   return (
     <section className="card action-card action-card--invite">
       <div className="action-card__icon" aria-hidden="true">
         ✉
       </div>
-      <h2 className="action-card__title">Позвать соперника</h2>
-      {invite ? (
+      <h2 className="action-card__title">Собрать компанию</h2>
+      {lobby ? (
         <>
           <p className="action-card__text">
-            Партия на {invite.steps_amount} {plural(invite.steps_amount, ["шаг", "шага", "шагов"])}. Отправьте код или
-            ссылку — игра откроется сама, как только соперник присоединится.
+            Партия на {lobby.steps_amount} {plural(lobby.steps_amount, ["шаг", "шага", "шагов"])}. Отправьте код или
+            ссылку друзьям и начните, когда все соберутся.
           </p>
-          <div className="code-field">
-            <span className="code-field__value">{invite.invite_code}</span>
-            <button
-              type="button"
-              className="code-field__copy"
-              onClick={() => copy(invite.invite_code, "Код скопирован")}
-              title="Скопировать код"
-              aria-label="Скопировать код"
-            >
-              <CopyIcon />
-            </button>
-          </div>
+          {lobby.invite && <InviteCode invite={lobby.invite} />}
           <div className="action-card__row">
-            <button className="btn btn--primary" onClick={() => copy(link, "Ссылка скопирована")}>
-              Скопировать ссылку
-            </button>
+            {lobby.invite && (
+              <button className="btn btn--ghost" onClick={() => copy(inviteLink(lobby.invite!.invite_code), "Ссылка скопирована")}>
+                Скопировать ссылку
+              </button>
+            )}
             <button className="btn btn--ghost" onClick={startOver} disabled={busy}>
               Новая партия
             </button>
           </div>
-          <p className="action-card__meta">
-            <span className="pulse" aria-hidden="true" /> Ждём соперника · код действует ещё {formatLeft(left)}
-          </p>
+          <div className="field">
+            <span className="field__label">
+              В партии {lobby.players.length} из {MAX_PLAYERS}
+            </span>
+            <Roster session={lobby} me={me} />
+          </div>
+          <button className="btn btn--primary" onClick={() => start(lobby.id)} disabled={busy || !enough}>
+            Начать партию
+          </button>
+          {!enough && <p className="action-card__hint">Начать можно, когда присоединится хотя бы один игрок.</p>}
         </>
       ) : (
         <form className="action-card__form" onSubmit={create}>
-          <p className="action-card__text">Выберите длину партии и получите код, который нужно передать другу.</p>
+          <p className="action-card__text">Выберите длину партии и получите код, который нужно передать друзьям.</p>
           <div className="field">
             <span className="field__label">
               Шагов в партии: <b className="steps-value">{steps}</b>
@@ -228,28 +223,19 @@ function InviteCard({ invite, onInvite }: { invite: Invite | null; onInvite(invi
                 className="range"
                 type="range"
                 min={1}
-                max={50}
+                max={MAX_STEPS}
                 value={steps}
                 onChange={(e) => setSteps(Number(e.target.value))}
                 aria-label="Количество шагов"
               />
             </div>
           </div>
-          <button className="btn btn--primary" disabled={busy}>
+          <button className="btn btn--primary" disabled={busy || loading}>
             {busy ? "Создаём…" : "Создать партию"}
           </button>
         </form>
       )}
     </section>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <rect x="9" y="9" width="12" height="12" rx="2.5" />
-      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
-    </svg>
   );
 }
 
@@ -301,76 +287,31 @@ function JoinCard({ initialCode }: { initialCode?: string }) {
 }
 
 function GameCard({ session, me }: { session: Session; me: string }) {
-  const opponent = opponentOf(session, me);
-  const badge = badgeOf(session);
+  const others = othersOf(session, me);
+  const badge = badgeOf(session, me);
   const done = myDoneActions(session);
   const total = session.steps_amount * 2;
 
   return (
     <a className={`game-card game-card--${badge.tone}`} href={links.game(session.id)}>
-      <div className="game-card__players">
-        <Avatar name={me} size={30} />
-        <span className="game-card__vs">×</span>
-        <Avatar name={opponent} size={30} />
-        <span className="game-card__name">{opponent}</span>
+      <div className="game-card__head">
+        <div className="game-card__players">
+          <Avatars names={session.players} />
+          <span className="game-card__name">{others.length > 0 ? joinNames(others) : "Пока только вы"}</span>
+        </div>
+        <span className={`badge badge--${badge.tone}`}>{badge.label}</span>
       </div>
-      <span className={`badge badge--${badge.tone}`}>{badge.label}</span>
       <div className="game-card__progress" aria-label={`Сделано ${done} из ${total}`}>
         <span style={{ width: `${(done / total) * 100}%` }} />
       </div>
       <div className="game-card__meta">
         <span>
-          {session.steps_amount} {plural(session.steps_amount, ["шаг", "шага", "шагов"])}
+          {session.status === "lobby"
+            ? `${session.players.length} ${plural(session.players.length, ["игрок", "игрока", "игроков"])}`
+            : `${session.players.length} ${plural(session.players.length, ["игрок", "игрока", "игроков"])} · ${session.steps_amount} ${plural(session.steps_amount, ["шаг", "шага", "шагов"])}`}
         </span>
         <span>{timeAgo(session.updated_at)}</span>
       </div>
     </a>
   );
-}
-
-/** The active invite survives page reloads until it expires. */
-function useStoredInvite(me: string): [Invite | null, (invite: Invite | null) => void] {
-  const key = `zvrtsh.invite.${me}`;
-  const [invite, setInvite] = useState<Invite | null>(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(key) ?? "null") as Invite | null;
-      // invites saved by an older version have no steps_amount
-      return stored && typeof stored.steps_amount === "number" && new Date(stored.expires_at).getTime() > Date.now()
-        ? stored
-        : null;
-    } catch {
-      return null;
-    }
-  });
-
-  const update = useCallback(
-    (value: Invite | null) => {
-      setInvite(value);
-      try {
-        if (value) localStorage.setItem(key, JSON.stringify(value));
-        else localStorage.removeItem(key);
-      } catch {
-        // not critical
-      }
-    },
-    [key],
-  );
-  return [invite, update];
-}
-
-function useCountdown(until: string | undefined): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!until) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [until]);
-  return until ? Math.max(0, Math.floor((new Date(until).getTime() - now) / 1000)) : 0;
-}
-
-function formatLeft(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
 }

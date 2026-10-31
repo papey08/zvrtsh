@@ -40,6 +40,19 @@ export function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   );
 }
 
+/** Avatars of several players overlapping each other, the rest as "+N". */
+export function Avatars({ names, size = 30, max = 4 }: { names: string[]; size?: number; max?: number }) {
+  const shown = names.length > max ? names.slice(0, max - 1) : names;
+  return (
+    <span className="avatars">
+      {shown.map((name) => (
+        <Avatar key={name} name={name} size={size} />
+      ))}
+      {shown.length < names.length && <span className="avatars__more">+{names.length - shown.length}</span>}
+    </span>
+  );
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   const { auth, logout } = useAuth();
   return (
@@ -60,7 +73,7 @@ export function Shell({ children }: { children: ReactNode }) {
         )}
       </header>
       <main className="shell__main">{children}</main>
-      <footer className="footer">Завертыш · игра для двоих, бумага и немного абсурда</footer>
+      <footer className="footer">Завертыш · игра для компании, бумага и немного абсурда</footer>
     </div>
   );
 }
@@ -77,7 +90,7 @@ function ConnectionBadge() {
   return (
     <span
       className={`connection connection--${status}`}
-      title={status === "online" ? "Ходы соперника приходят сразу" : "Переподключаемся, ходы пока обновляются реже"}
+      title={status === "online" ? "Ходы других игроков приходят сразу" : "Переподключаемся, ходы пока обновляются реже"}
     >
       <i aria-hidden="true" />
       <span className="connection__label">{CONNECTION_LABELS[status]}</span>

@@ -5,14 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
-	"time"
 	"zvrtsh/internal/model"
-	inviterepo "zvrtsh/internal/repo/invite_repo"
 	userrepo "zvrtsh/internal/repo/user_repo"
 
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -30,19 +26,11 @@ const (
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy password"), bcrypt.DefaultCost)
 
 type userAppImpl struct {
-	users     userrepo.UserRepo
-	invites   inviterepo.InviteRepo
-	inviteTTL time.Duration
-	now       func() time.Time
+	users userrepo.UserRepo
 }
 
-func newUserApp(users userrepo.UserRepo, invites inviterepo.InviteRepo, inviteTTL time.Duration, now func() time.Time) *userAppImpl {
-	return &userAppImpl{
-		users:     users,
-		invites:   invites,
-		inviteTTL: inviteTTL,
-		now:       now,
-	}
+func newUserApp(users userrepo.UserRepo) *userAppImpl {
+	return &userAppImpl{users: users}
 }
 
 func (u *userAppImpl) RegisterUser(ctx context.Context, name string, password string) (model.User, error) {
@@ -97,34 +85,6 @@ func (u *userAppImpl) Authenticate(ctx context.Context, token string) (string, e
 		return "", err
 	}
 	return user.Name, nil
-}
-
-func (u *userAppImpl) CreateInvite(ctx context.Context, userName string, stepsAmount int) (model.Invite, error) {
-	if stepsAmount < 1 || stepsAmount > maxStepsAmount {
-		return model.Invite{}, fmt.Errorf("%w: steps amount must be between 1 and %d", model.ErrValidation, maxStepsAmount)
-	}
-
-	now := u.now()
-	invite := model.Invite{
-		Code:         uuid.New().String(),
-		UserName:     userName,
-		StepsAmount:  stepsAmount,
-		CreationDate: now,
-		ExpiresAt:    now.Add(u.inviteTTL),
-	}
-	if err := u.invites.CreateInvite(ctx, invite); err != nil {
-		return model.Invite{}, err
-	}
-	return invite, nil
-}
-
-// DeleteInvite cancels the active invite of the user, if there is one.
-func (u *userAppImpl) DeleteInvite(ctx context.Context, userName string) error {
-	return u.invites.DeleteInvite(ctx, userName)
-}
-
-func (u *userAppImpl) purgeExpiredInvites(ctx context.Context) error {
-	return u.invites.DeleteExpiredInvites(ctx, u.now())
 }
 
 // isValidName checks that the name consists of latin letters, digits and _.
