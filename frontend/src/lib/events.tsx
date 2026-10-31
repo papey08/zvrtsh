@@ -5,7 +5,8 @@ import { useToast } from "./toast";
 
 export type ConnectionStatus = "connecting" | "online" | "offline";
 
-type Listener = (session: Session) => void;
+/** Gets an updated session, or only the id of a deleted one. */
+type Listener = (session: Session | null, deletedId?: string) => void;
 
 type EventsContextValue = {
   status: ConnectionStatus;
@@ -62,6 +63,8 @@ export function EventsProvider({ children }: { children: ReactNode }) {
           setSyncKey((k) => k + 1);
         } else if (msg.type === "session_updated" && msg.session) {
           for (const listener of listeners.current) listener(msg.session);
+        } else if (msg.type === "session_deleted" && msg.session_id) {
+          for (const listener of listeners.current) listener(null, msg.session_id);
         }
       };
 
@@ -123,14 +126,24 @@ export function useConnection(): { status: ConnectionStatus; syncKey: number } {
   return { status, syncKey };
 }
 
-/** Calls listener with every updated session of the player. */
-export function useSessionEvents(listener: Listener) {
+/**
+ * Calls onUpdate with every updated session of the player and onDelete with
+ * the id of every session cancelled by its host.
+ */
+export function useSessionEvents(onUpdate: (session: Session) => void, onDelete?: (id: string) => void) {
   const { subscribe } = useEvents();
-  const saved = useRef(listener);
+  const saved = useRef({ onUpdate, onDelete });
   useEffect(() => {
-    saved.current = listener;
-  }, [listener]);
-  useEffect(() => subscribe((session) => saved.current(session)), [subscribe]);
+    saved.current = { onUpdate, onDelete };
+  }, [onUpdate, onDelete]);
+  useEffect(
+    () =>
+      subscribe((session, deletedId) => {
+        if (session) saved.current.onUpdate(session);
+        else if (deletedId) saved.current.onDelete?.(deletedId);
+      }),
+    [subscribe],
+  );
 }
 
 /** The newest of two snapshots of the same session. */

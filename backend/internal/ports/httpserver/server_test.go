@@ -12,7 +12,6 @@ import (
 	"time"
 	"zvrtsh/internal/app"
 	"zvrtsh/internal/ports/httpserver/api"
-	invitefake "zvrtsh/internal/repo/invite_repo/fake"
 	sessionfake "zvrtsh/internal/repo/session_repo/fake"
 	userfake "zvrtsh/internal/repo/user_repo/fake"
 
@@ -31,7 +30,7 @@ func newTestServer(t *testing.T) *testServer {
 	t.Cleanup(cancel)
 
 	cfg := app.Config{InviteTTL: time.Hour, SessionTTL: time.Hour}
-	a := app.New(ctx, cfg, userfake.New(), invitefake.New(), sessionfake.New())
+	a := app.New(ctx, cfg, userfake.New(), sessionfake.New())
 	return &testServer{t: t, router: newRouter(ctx, a)}
 }
 
@@ -77,9 +76,22 @@ func (s *testServer) signUp(name string) string {
 	return token.Token
 }
 
-func TestGame(t *testing.T) {
+// startGame hosts a session by the first token, lets the others join and starts it.
+func (s *testServer) startGame(steps int, tokens ...string) api.Session {
+	s.t.Helper()
+	var invite api.Invite
+	s.expect(http.StatusCreated, "POST", "/invites", tokens[0], api.CreateInviteRequest{StepsAmount: steps}, &invite)
+	for _, token := range tokens[1:] {
+		s.expect(http.StatusCreated, "POST", "/sessions", token, api.CreateSessionRequest{InviteCode: invite.InviteCode}, nil)
+	}
+	var session api.Session
+	s.expect(http.StatusOK, "POST", "/sessions/"+invite.SessionId+"/start", tokens[0], nil, &session)
+	return session
+}
+
+func TestLobby(t *testing.T) {
 	s := newTestServer(t)
-	alice, bobby := s.signUp("alice"), s.signUp("bobby")
+	alice, bobby, carol := s.signUp("alice"), s.signUp("bobby"), s.signUp("carol")
 
 	// a cancelled invite cannot be used
 	var invite api.Invite
@@ -88,20 +100,48 @@ func TestGame(t *testing.T) {
 	s.expect(http.StatusNotFound, "POST", "/sessions", alice, api.CreateSessionRequest{InviteCode: invite.InviteCode}, nil)
 
 	s.expect(http.StatusCreated, "POST", "/invites", bobby, api.CreateInviteRequest{StepsAmount: 2}, &invite)
-	if invite.StepsAmount != 2 {
+	if invite.StepsAmount != 2 || invite.SessionId == "" {
 		t.Fatalf("unexpected invite: %+v", invite)
 	}
+	sessionPath := "/sessions/" + invite.SessionId
 
 	var session api.Session
-	s.expect(http.StatusCreated, "POST", "/sessions", alice,
-		api.CreateSessionRequest{InviteCode: invite.InviteCode}, &session)
+	s.expect(http.StatusOK, "GET", sessionPath, bobby, nil, &session)
+	if session.Status != api.Lobby || session.Host != "bobby" || session.Invite == nil || session.Invite.InviteCode != invite.InviteCode || len(session.Progress) != 0 {
+		t.Fatalf("unexpected lobby: %+v", session)
+	}
+	s.expect(http.StatusConflict, "POST", sessionPath+"/start", bobby, nil, nil)
+
+	for _, token := range []string{alice, carol} {
+		s.expect(http.StatusCreated, "POST", "/sessions", token, api.CreateSessionRequest{InviteCode: invite.InviteCode}, &session)
+	}
+	if strings.Join(session.Players, ",") != "bobby,alice,carol" || session.Status != api.Lobby {
+		t.Fatalf("players of the lobby: %+v", session)
+	}
+	s.expect(http.StatusConflict, "POST", sessionPath+"/steps/0/question", alice, api.QuestionRequest{HiddenQuestion: "h", OpenQuestion: "o"}, nil)
+	s.expect(http.StatusForbidden, "POST", sessionPath+"/start", alice, nil, nil)
+
+	session = api.Session{}
+	s.expect(http.StatusOK, "POST", sessionPath+"/start", bobby, nil, &session)
+	if session.Status != api.InWork || session.Invite != nil || len(session.Progress) != 2 {
+		t.Fatalf("started session: %+v", session)
+	}
+	s.expect(http.StatusConflict, "POST", sessionPath+"/start", bobby, nil, nil)
+	s.expect(http.StatusNotFound, "POST", "/sessions", s.signUp("david"), api.CreateSessionRequest{InviteCode: invite.InviteCode}, nil)
+}
+
+func TestGame(t *testing.T) {
+	s := newTestServer(t)
+	alice, bobby := s.signUp("alice"), s.signUp("bobby")
+
+	session := s.startGame(2, bobby, alice)
 	if session.Status != api.InWork || session.StepsAmount != 2 || len(session.Players) != 2 {
 		t.Fatalf("unexpected session: %+v", session)
 	}
 	sessionPath := "/sessions/" + session.Id
 
 	s.expect(http.StatusOK, "GET", sessionPath, bobby, nil, &session)
-	if len(session.Progress) != 2 || session.Progress[0] != (api.StepProgress{}) {
+	if p := session.Progress; len(p) != 2 || p[0].MyQuestion || p[0].AnswerSheetReady || p[0].AnswerSheetFrom != "alice" {
 		t.Fatalf("unexpected progress: %+v", session.Progress)
 	}
 	var list []api.Session
@@ -118,7 +158,7 @@ func TestGame(t *testing.T) {
 		}
 		for name, token := range map[string]string{"alice": alice, "bobby": bobby} {
 			var q api.OpenQuestion
-			s.expect(http.StatusOK, "GET", stepPath+"/opponent-question", token, nil, &q)
+			s.expect(http.StatusOK, "GET", stepPath+"/question-to-answer", token, nil, &q)
 			if q.OpenQuestion == name+" open" {
 				t.Errorf("step %d: %s got their own question", step, name)
 			}
@@ -131,7 +171,7 @@ func TestGame(t *testing.T) {
 		t.Errorf("session is not done: %+v", session)
 	}
 	for _, p := range session.Progress {
-		if !p.MyQuestion || !p.MyAnswer || !p.OpponentQuestion || !p.OpponentAnswer {
+		if !p.MyQuestion || !p.MyAnswer || p.QuestionsWritten != 2 || p.AnswersWritten != 2 {
 			t.Errorf("progress of a finished session: %+v", p)
 		}
 	}
@@ -141,7 +181,7 @@ func TestGame(t *testing.T) {
 	if results.Id != session.Id || len(results.Sheets) != 2 || len(results.Sheets[0].Steps) != 2 {
 		t.Fatalf("unexpected results: %+v", results)
 	}
-	if results.Sheets[0].Steps[0].Answer != "42" {
+	if step := results.Sheets[0].Steps[0]; step.Answer != "42" || step.Asker != "bobby" || step.Answerer != "alice" {
 		t.Errorf("unexpected step: %+v", results.Sheets[0].Steps[0])
 	}
 
@@ -157,11 +197,7 @@ func TestErrors(t *testing.T) {
 	s := newTestServer(t)
 	alice, bobby, carol := s.signUp("alice"), s.signUp("bobby"), s.signUp("carol")
 
-	var invite api.Invite
-	s.expect(http.StatusCreated, "POST", "/invites", bobby, api.CreateInviteRequest{StepsAmount: 2}, &invite)
-	var session api.Session
-	s.expect(http.StatusCreated, "POST", "/sessions", alice,
-		api.CreateSessionRequest{InviteCode: invite.InviteCode}, &session)
+	session := s.startGame(2, bobby, alice)
 	step := "/sessions/" + session.Id + "/steps/0"
 
 	var e api.Error
@@ -189,9 +225,11 @@ func TestErrors(t *testing.T) {
 		{"invite without body", 400, "POST", "/invites", alice, nil},
 		{"empty answer", 400, "POST", step + "/answer", alice, api.AnswerRequest{}},
 		{"answer too early", 409, "POST", step + "/answer", alice, api.AnswerRequest{Answer: "a"}},
-		{"question not written", 409, "GET", step + "/opponent-question", alice, nil},
-		{"step out of range", 400, "GET", "/sessions/" + session.Id + "/steps/7/opponent-question", alice, nil},
-		{"step is not a number", 400, "GET", "/sessions/" + session.Id + "/steps/x/opponent-question", alice, nil},
+		{"question not written", 409, "GET", step + "/question-to-answer", alice, nil},
+		{"step out of range", 400, "GET", "/sessions/" + session.Id + "/steps/7/question-to-answer", alice, nil},
+		{"step is not a number", 400, "GET", "/sessions/" + session.Id + "/steps/x/question-to-answer", alice, nil},
+		{"start by a guest", 403, "POST", "/sessions/" + session.Id + "/start", alice, nil},
+		{"start of a started session", 409, "POST", "/sessions/" + session.Id + "/start", bobby, nil},
 		{"unknown route", 404, "GET", "/nothing", alice, nil},
 	}
 	for _, c := range cases {
@@ -265,24 +303,17 @@ func TestFinishVote(t *testing.T) {
 	s := newTestServer(t)
 	alice, bobby, carol := s.signUp("alice"), s.signUp("bobby"), s.signUp("carol")
 
-	var invite api.Invite
-	s.expect(http.StatusCreated, "POST", "/invites", bobby, api.CreateInviteRequest{StepsAmount: 5}, &invite)
-	var session api.Session
-	s.expect(http.StatusCreated, "POST", "/sessions", alice, api.CreateSessionRequest{InviteCode: invite.InviteCode}, &session)
+	session := s.startGame(5, bobby, alice)
 	votePath := "/sessions/" + session.Id + "/finish-vote"
 
 	s.expect(http.StatusOK, "PUT", votePath, alice, nil, &session)
-	if !session.MyFinishVote || session.OpponentFinishVote {
-		t.Errorf("alice's view after her vote: %+v", session)
-	}
-	s.expect(http.StatusOK, "GET", "/sessions/"+session.Id, bobby, nil, &session)
-	if session.MyFinishVote || !session.OpponentFinishVote {
-		t.Errorf("bobby's view after alice's vote: %+v", session)
+	if strings.Join(session.FinishVotes, ",") != "alice" {
+		t.Errorf("votes after alice's vote: %v", session.FinishVotes)
 	}
 
 	s.expect(http.StatusOK, "DELETE", votePath, alice, nil, &session)
-	if session.MyFinishVote {
-		t.Errorf("vote is not withdrawn: %+v", session)
+	if len(session.FinishVotes) != 0 {
+		t.Errorf("vote is not withdrawn: %v", session.FinishVotes)
 	}
 
 	s.expect(http.StatusForbidden, "PUT", votePath, carol, nil, nil)
@@ -292,7 +323,7 @@ func TestFinishVote(t *testing.T) {
 	// nothing is written yet, so the game is cut to the first step
 	s.expect(http.StatusOK, "PUT", votePath, alice, nil, nil)
 	s.expect(http.StatusOK, "PUT", votePath, bobby, nil, &session)
-	if session.StepsAmount != 1 || len(session.Progress) != 1 || session.MyFinishVote || session.OpponentFinishVote {
+	if session.StepsAmount != 1 || len(session.Progress) != 1 || len(session.FinishVotes) != 0 {
 		t.Fatalf("session after the agreement: %+v", session)
 	}
 

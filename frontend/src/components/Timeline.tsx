@@ -1,16 +1,27 @@
 import type { Session } from "../api/client";
-import { opponentOf, stageOf } from "../lib/game";
+import { stageOf } from "../lib/game";
 import { Avatar } from "./ui";
 
-/** Progress of both players: every step has a question half and an answer half. */
+/**
+ * Progress of the player and of the whole company: every step has a question
+ * half and an answer half, the company's halves fill up as players finish them.
+ */
 export function Timeline({ session, me }: { session: Session; me: string }) {
-  const opponent = opponentOf(session, me);
   const stage = stageOf(session);
   const current = "step" in stage ? stage.step : -1;
+  const n = session.players.length;
 
   const rows = [
-    { who: "Вы", name: me, marks: session.progress.map((p) => [p.my_question, p.my_answer]) },
-    { who: opponent, name: opponent, marks: session.progress.map((p) => [p.opponent_question, p.opponent_answer]) },
+    {
+      who: "Вы",
+      avatar: <Avatar name={me} size={24} />,
+      marks: session.progress.map((p) => [Number(p.my_question), Number(p.my_answer)]),
+    },
+    {
+      who: "Все",
+      avatar: <span className="timeline__all">{n}</span>,
+      marks: session.progress.map((p) => [p.questions_written / n, p.answers_written / n]),
+    },
   ];
 
   return (
@@ -18,7 +29,7 @@ export function Timeline({ session, me }: { session: Session; me: string }) {
       {rows.map((row) => (
         <div className="timeline__row" key={row.who}>
           <span className="timeline__who">
-            <Avatar name={row.name} size={24} />
+            {row.avatar}
             <span>{row.who}</span>
           </span>
           <span className="timeline__cells">
@@ -26,10 +37,10 @@ export function Timeline({ session, me }: { session: Session; me: string }) {
               <span
                 key={i}
                 className={`timeline__cell${i === current ? " is-current" : ""}`}
-                title={`Шаг ${i + 1}: ${question ? "вопрос написан" : "вопроса нет"}, ${answer ? "ответ дан" : "ответа нет"}`}
+                title={`Шаг ${i + 1}: вопросы ${Math.round(question * n)} из ${n}, ответы ${Math.round(answer * n)} из ${n}`}
               >
-                <i className={question ? "is-on" : ""} />
-                <i className={answer ? "is-on" : ""} />
+                <i className={question === 1 ? "is-on" : ""} style={{ ["--fill" as string]: question }} />
+                <i className={answer === 1 ? "is-on" : ""} style={{ ["--fill" as string]: answer }} />
               </span>
             ))}
           </span>

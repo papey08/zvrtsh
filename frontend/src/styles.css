@@ -956,6 +956,12 @@ textarea {
   color: var(--muted);
 }
 
+.action-card__hint {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .action-card__row {
   display: flex;
   flex-wrap: wrap;
@@ -1078,33 +1084,33 @@ textarea {
   box-shadow: 0 0 0 1px rgba(242, 193, 78, 0.45) inset;
 }
 
+.game-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
 .game-card__players {
   display: flex;
+  flex: 1 1 140px;
   align-items: center;
-  gap: 6px;
-}
-
-.game-card__players .avatar + .game-card__vs + .avatar {
-  margin-left: -2px;
-}
-
-.game-card__vs {
-  color: var(--muted);
-  font-weight: 800;
+  gap: 10px;
+  min-width: 0;
 }
 
 .game-card__name {
-  margin-left: 6px;
   font-weight: 800;
   font-size: 17px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .game-card .badge {
-  position: absolute;
-  top: 20px;
-  right: 20px;
+  flex: none;
 }
 
 .game-card__progress {
@@ -1515,16 +1521,33 @@ textarea {
   height: 10px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.08);
-  transition: background 0.4s;
 }
 
-.timeline__cell i.is-on {
-  background: var(--ink-blue);
+/* the half fills up as the players finish it */
+.timeline__cell i {
+  --mark: var(--ink-blue);
+  background: linear-gradient(90deg, var(--mark) calc(var(--fill, 0) * 100%), rgba(255, 255, 255, 0.08) 0);
 }
 
-.timeline__cell i:last-child.is-on,
+.timeline__cell i:last-child,
 .timeline__legend i.is-answer {
+  --mark: var(--ink-red);
   background: var(--ink-red);
+}
+
+.timeline__cell i:last-child {
+  background: linear-gradient(90deg, var(--mark) calc(var(--fill, 0) * 100%), rgba(255, 255, 255, 0.08) 0);
+}
+
+.timeline__all {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .timeline__legend {
@@ -1727,15 +1750,123 @@ textarea {
   content: "— ";
 }
 
-/* the ink of the player who has created the session and of the other one */
+/* the inks of the players in the order of joining, readable on paper */
 .ink--1 {
   --ink-color: var(--ink-blue);
-  color: var(--ink-color);
 }
 
 .ink--2 {
   --ink-color: var(--ink-red);
+}
+
+.ink--3 {
+  --ink-color: #1d8a4e;
+}
+
+.ink--4 {
+  --ink-color: #7b3fc6;
+}
+
+.ink--5 {
+  --ink-color: #d9771a;
+}
+
+.ink--6 {
+  --ink-color: #0e8790;
+}
+
+.ink--7 {
+  --ink-color: #c2337a;
+}
+
+.ink--8 {
+  --ink-color: #8a5a2b;
+}
+
+:is(.ink--1, .ink--2, .ink--3, .ink--4, .ink--5, .ink--6, .ink--7, .ink--8) {
   color: var(--ink-color);
+}
+
+/* players of a session: in the lobby card and in the waiting room */
+.roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roster__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  /* the ink is shown by the dot, the name stays readable on the desk */
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  animation: strip-in 0.4s var(--ease-out);
+}
+
+.roster__item::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-color);
+}
+
+.roster__host {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.roster__free {
+  display: flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.avatars {
+  display: flex;
+  align-items: center;
+}
+
+.avatars .avatar + .avatar {
+  margin-left: -8px;
+}
+
+.avatars__more {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.waiting-room {
+  display: grid;
+  gap: 22px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.waiting-room__title {
+  margin: 0;
+}
+
+.waiting-room__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .results__legend {

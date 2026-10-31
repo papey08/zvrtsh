@@ -2,81 +2,98 @@ import type { Session } from "../api/client";
 
 /** What the player has to do next in the session. */
 export type Stage =
+  | { kind: "lobby" }
   | { kind: "write"; step: number }
-  | { kind: "wait-question"; step: number }
   | { kind: "answer"; step: number }
+  | { kind: "wait-questions"; step: number }
   | { kind: "wait-finish" }
   | { kind: "done" };
 
 /**
- * At every step the player writes their own question and then answers the
- * opponent's one. The question of step i+1 opens after the answer of step i.
+ * At every step the player writes a question and then answers the question on
+ * another sheet. The sheets are shuffled when everybody has written the
+ * question; after the answer the sheet stays with the player for the next
+ * question.
  */
 export function stageOf(session: Session): Stage {
+  if (session.status === "lobby") return { kind: "lobby" };
   if (session.status === "done") return { kind: "done" };
   for (let step = 0; step < session.progress.length; step++) {
     const p = session.progress[step];
     if (!p.my_question) return { kind: "write", step };
-    if (!p.my_answer) return p.opponent_question ? { kind: "answer", step } : { kind: "wait-question", step };
+    if (!p.my_answer) return p.answer_sheet_ready ? { kind: "answer", step } : { kind: "wait-questions", step };
   }
   return { kind: "wait-finish" };
 }
 
-export function opponentOf(session: Session, me: string): string {
-  return session.players.find((p) => p !== me) ?? session.players[1];
+/** The other players of the session, in the order they have joined. */
+export function othersOf(session: Session, me: string): string[] {
+  return session.players.filter((p) => p !== me);
 }
 
-/** The player who created the session (used the invite). */
-export function creatorOf(session: Session): string {
-  return session.players[0];
+/** "Аня", "Аня и Боря", "Аня, Боря и Вера". */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} и ${names[names.length - 1]}`;
+}
+
+export const MAX_PLAYERS = 8;
+export const MAX_STEPS = 10; // the maximum of CreateInviteRequest in api/openapi.yaml
+
+/** Every player writes in their own ink, by the order of joining. */
+export function inkOf(session: Session, player: string): string {
+  const idx = session.players.indexOf(player);
+  return `ink--${(idx === -1 ? 0 : idx) + 1}`;
 }
 
 export function myDoneActions(session: Session): number {
   return session.progress.reduce((n, p) => n + Number(p.my_question) + Number(p.my_answer), 0);
 }
 
-export function opponentDoneActions(session: Session): number {
-  return session.progress.reduce((n, p) => n + Number(p.opponent_question) + Number(p.opponent_answer), 0);
+/** Questions and answers written by everybody. */
+export function allDoneActions(session: Session): number {
+  return session.progress.reduce((n, p) => n + p.questions_written + p.answers_written, 0);
 }
 
 export type Badge = { label: string; tone: "turn" | "wait" | "done" };
 
 /**
- * The step the session ends with if both players agree to finish early. It
+ * The step the session ends with if everybody agrees to finish early. It
  * mirrors Session.CurrentStep of the backend: the latest step anybody has
  * written on, or the first unfinished one if it is later.
  */
 export function currentStepOf(session: Session): number {
   let touched = 0;
   session.progress.forEach((p, i) => {
-    if (p.my_question || p.opponent_question) touched = i;
+    if (p.questions_written > 0) touched = i;
   });
-  const unfinished = session.progress.findIndex((p) => !(p.my_answer && p.opponent_answer));
+  const unfinished = session.progress.findIndex((p) => p.answers_written < session.players.length);
   return unfinished === -1 ? touched : Math.max(touched, unfinished);
 }
 
-export function badgeOf(session: Session): Badge {
+export function canFinishEarly(session: Session): boolean {
+  return session.status === "in_work" && currentStepOf(session) + 1 < session.steps_amount;
+}
+
+export function badgeOf(session: Session, me: string): Badge {
   const stage = stageOf(session);
-  const canFinishEarly = stage.kind !== "done" && currentStepOf(session) + 1 < session.steps_amount;
-  if (canFinishEarly && session.opponent_finish_vote && !session.my_finish_vote) {
+  const votes = session.finish_votes;
+  if (canFinishEarly(session) && votes.length > 0 && !votes.includes(me)) {
     return { label: "Предлагают закончить", tone: "turn" };
   }
   switch (stage.kind) {
+    case "lobby":
+      return session.host === me
+        ? { label: session.players.length > 1 ? "Можно начинать" : "Ждём игроков", tone: "turn" }
+        : { label: "Ждём начала", tone: "wait" };
     case "done":
       return { label: "Можно разворачивать", tone: "done" };
     case "write":
     case "answer":
       return { label: "Ваш ход", tone: "turn" };
     default:
-      return { label: "Ход соперника", tone: "wait" };
+      return { label: "Ждём остальных", tone: "wait" };
   }
-}
-
-/** What the opponent is busy with while the player waits for their question. */
-export function opponentActivity(session: Session, step: number): string {
-  const previous = session.progress[step - 1];
-  if (previous && !previous.opponent_answer) return "отвечает на ваш вопрос";
-  return "сочиняет вопрос";
 }
 
 export function plural(n: number, forms: [string, string, string]): string {
@@ -105,11 +122,6 @@ export function suggestOpenPart(question: string): string {
   if (words.length === 0) return "";
   const open = words.slice(0, words[0].length < 3 ? 2 : 1).join(" ");
   return open[0].toUpperCase() + open.slice(1) + "?";
-}
-
-/** Every player writes in their own ink: the creator of the session in blue, the other one in red. */
-export function inkOf(session: Session, player: string): string {
-  return player === creatorOf(session) ? "ink--1" : "ink--2";
 }
 
 export const QUESTION_WORDS = ["Кто?", "Что?", "Где?", "Когда?", "Зачем?", "Как?", "Сколько?", "С кем?", "Какой?"];

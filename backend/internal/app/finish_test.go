@@ -8,8 +8,8 @@ import (
 	"zvrtsh/internal/model"
 )
 
-// The players of the games in this file; alice has created the session (sheet 0).
-var players = [2]string{"alice", "bobby"}
+// The players of the two player games in this file; alice is the host (sheet 0).
+var pair = []string{"alice", "bobby"}
 
 // move is one action of a player: a question or an answer for the step.
 type move struct {
@@ -33,25 +33,12 @@ func (m move) apply(ctx context.Context, a *app, id string) error {
 	return a.MakeAnswer(ctx, id, m.player, m.step, m.String())
 }
 
-// newQuickGame starts a session without registration: the fakes do not check users.
-func newQuickGame(t *testing.T, steps int) (*app, string) {
-	t.Helper()
-	a := newTestApp(t)
-	invite, err := a.CreateInvite(context.Background(), players[1], steps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := a.CreateSession(context.Background(), players[0], invite.Code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a, session.Id
-}
-
 // replay starts a game and makes the moves; ok is false if a move is not allowed.
-func replay(t *testing.T, steps int, moves []move) (a *app, id string, ok bool) {
+// The deal of a new test app is always the same, so is the game.
+func replay(t *testing.T, players []string, steps int, moves []move) (a *app, id string, ok bool) {
 	t.Helper()
-	a, id = newQuickGame(t, steps)
+	a = newTestApp(t)
+	id = startGame(t, a, steps, players...)
 	for _, m := range moves {
 		if err := m.apply(context.Background(), a, id); err != nil {
 			return a, id, false
@@ -64,7 +51,7 @@ func replay(t *testing.T, steps int, moves []move) (a *app, id string, ok bool) 
 // not written yet and the first answer not given yet.
 func candidates(s model.Session) []move {
 	var result []move
-	for _, player := range players {
+	for _, player := range s.PlayerNames() {
 		me, _ := s.PlayerIdx(player)
 		progress := s.Progress(me)
 		for step, p := range progress {
@@ -90,7 +77,7 @@ func playToEnd(t *testing.T, a *app, id string) map[string]int {
 	ctx := context.Background()
 	questions := map[string]int{}
 	for {
-		s, err := a.GetSession(ctx, id, players[0])
+		s, err := a.GetSession(ctx, id, pair[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +109,17 @@ func vote(t *testing.T, a *app, id string, player string, value bool) model.Sess
 	return s
 }
 
-// TestFinishScenarios checks the situations from the description of the feature.
+// stateOf describes what every player has done.
+func stateOf(s model.Session) string {
+	var state string
+	for i := range s.Players {
+		state += fmt.Sprint(s.Progress(i))
+	}
+	return state
+}
+
+// TestFinishScenarios checks the situations from the description of the feature
+// with two players.
 func TestFinishScenarios(t *testing.T) {
 	ctx := context.Background()
 	// the first step is fully played in every scenario
@@ -175,23 +172,23 @@ func TestFinishScenarios(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			a, id, ok := replay(t, 5, c.moves)
+			a, id, ok := replay(t, pair, 5, c.moves)
 			if !ok {
 				t.Fatal("the moves of the case are not allowed")
 			}
 
 			// one vote changes nothing but the vote
 			s := vote(t, a, id, "alice", true)
-			if len(s.Sheets[0].Steps) != 5 || s.FinishVotes != [2]bool{true, false} {
-				t.Fatalf("after the first vote: %d steps, votes %v", len(s.Sheets[0].Steps), s.FinishVotes)
+			if s.StepsAmount != 5 || votesOf(s) != "[true false]" {
+				t.Fatalf("after the first vote: %d steps, votes %v", s.StepsAmount, votesOf(s))
 			}
 
 			s = vote(t, a, id, "bobby", true)
-			if n := len(s.Sheets[0].Steps); n != c.wantSteps {
-				t.Errorf("session has %d steps after the agreement, want %d", n, c.wantSteps)
+			if s.StepsAmount != c.wantSteps || len(s.Sheets[1].Steps) != c.wantSteps {
+				t.Errorf("session has %d steps after the agreement, want %d", s.StepsAmount, c.wantSteps)
 			}
-			if s.FinishVotes != [2]bool{} {
-				t.Errorf("votes are not reset: %v", s.FinishVotes)
+			if votesOf(s) != "[false false]" {
+				t.Errorf("votes are not reset: %v", votesOf(s))
 			}
 
 			if got := playToEnd(t, a, id); fmt.Sprint(got) != fmt.Sprint(c.wantQuestions) {
@@ -204,23 +201,57 @@ func TestFinishScenarios(t *testing.T) {
 	}
 }
 
+func votesOf(s model.Session) string {
+	votes := make([]bool, len(s.Players))
+	for i, p := range s.Players {
+		votes[i] = p.FinishVote
+	}
+	return fmt.Sprint(votes)
+}
+
+// TestFinishWithEverybody checks that a session of several players is shortened
+// only when all of them agree.
+func TestFinishWithEverybody(t *testing.T) {
+	players := []string{"alice", "bobby", "carol", "dave"}
+	a, id, _ := replay(t, players, 4, nil)
+	for _, p := range players[:3] {
+		if s := vote(t, a, id, p, true); s.StepsAmount != 4 {
+			t.Fatalf("shortened after the vote of %s", p)
+		}
+	}
+	if s := vote(t, a, id, "dave", true); s.StepsAmount != 1 || votesOf(s) != "[false false false false]" {
+		t.Errorf("after all votes: %d steps, votes %s", s.StepsAmount, votesOf(s))
+	}
+	playToEnd(t, a, id)
+}
+
 // TestFinishInEveryState agrees to finish in every reachable state of a game,
-// in both orders of votes, and checks that nothing written is lost, the game
+// in every order of votes, and checks that nothing written is lost, the game
 // can be completed and nobody has to write more than one question.
 func TestFinishInEveryState(t *testing.T) {
-	const steps = 3
+	for _, c := range []struct {
+		players []string
+		steps   int
+	}{{pair, 3}, {[]string{"alice", "bobby", "carol"}, 2}} {
+		t.Run(fmt.Sprint(len(c.players)), func(t *testing.T) {
+			finishInEveryState(t, c.players, c.steps)
+		})
+	}
+}
+
+func finishInEveryState(t *testing.T, players []string, steps int) {
 	ctx := context.Background()
 	seen := map[string]bool{}
 	var states int
 
 	var explore func(moves []move)
 	explore = func(moves []move) {
-		a, id, ok := replay(t, steps, moves)
+		a, id, ok := replay(t, players, steps, moves)
 		if !ok {
 			return
 		}
 		before, _ := a.GetSession(ctx, id, players[0])
-		key := fmt.Sprint(before.Progress(0))
+		key := stateOf(before)
 		if seen[key] {
 			return
 		}
@@ -230,13 +261,16 @@ func TestFinishInEveryState(t *testing.T) {
 		}
 		states++
 
-		for _, first := range []int{0, 1} {
-			a, id, _ := replay(t, steps, moves)
-			vote(t, a, id, players[first], true)
-			after := vote(t, a, id, players[1-first], true)
+		for first := range players {
+			a, id, _ := replay(t, players, steps, moves)
+			// the first voter changes, the others follow in their order
+			var after model.Session
+			for i := range players {
+				after = vote(t, a, id, players[(first+i)%len(players)], true)
+			}
 
-			n := len(after.Sheets[0].Steps)
-			if n < 1 || n > steps {
+			n := after.StepsAmount
+			if n < 1 || n > steps || n != before.CurrentStep()+1 {
 				t.Fatalf("%v: %d steps after the agreement", moves, n)
 			}
 			for sheet := range before.Sheets {
@@ -262,20 +296,20 @@ func TestFinishInEveryState(t *testing.T) {
 	if states < 10 {
 		t.Fatalf("only %d states were checked", states)
 	}
-	t.Logf("checked %d states of a game of %d steps", states, steps)
+	t.Logf("checked %d states of a game of %d players and %d steps", states, len(players), steps)
 }
 
 func TestFinishVoteRules(t *testing.T) {
 	ctx := context.Background()
-	a, id := newQuickGame(t, 2)
+	a, id, _ := replay(t, pair, 2, nil)
 
 	// a withdrawn vote does not count
 	vote(t, a, id, "alice", true)
-	if s := vote(t, a, id, "alice", false); s.FinishVotes != [2]bool{} {
-		t.Errorf("vote is not withdrawn: %v", s.FinishVotes)
+	if s := vote(t, a, id, "alice", false); votesOf(s) != "[false false]" {
+		t.Errorf("vote is not withdrawn: %v", votesOf(s))
 	}
-	if s := vote(t, a, id, "bobby", true); len(s.Sheets[0].Steps) != 2 {
-		t.Errorf("session was shortened by one vote: %d steps", len(s.Sheets[0].Steps))
+	if s := vote(t, a, id, "bobby", true); s.StepsAmount != 2 {
+		t.Errorf("session was shortened by one vote: %d steps", s.StepsAmount)
 	}
 
 	if _, err := a.VoteFinish(ctx, id, "carol", true); !errors.Is(err, model.ErrNotParticipant) {
@@ -290,9 +324,9 @@ func TestFinishVoteRules(t *testing.T) {
 	defer unsubscribe()
 	vote(t, a, id, "alice", true)
 	select {
-	case s := <-events:
-		if len(s.Sheets[0].Steps) != 1 {
-			t.Errorf("event about the agreement has %d steps", len(s.Sheets[0].Steps))
+	case e := <-events:
+		if e.Session.StepsAmount != 1 {
+			t.Errorf("event about the agreement has %d steps", e.Session.StepsAmount)
 		}
 	default:
 		t.Error("no event about the agreement")

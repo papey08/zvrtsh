@@ -30,6 +30,8 @@ func writeError(c *gin.Context, err error) {
 		c.Header("WWW-Authenticate", "Bearer")
 	case errors.Is(err, model.ErrNotParticipant):
 		status, message = http.StatusForbidden, model.ErrNotParticipant.Error()
+	case errors.Is(err, model.ErrNotHost):
+		status, message = http.StatusForbidden, model.ErrNotHost.Error()
 	case errors.Is(err, model.ErrNoSession):
 		status, message = http.StatusNotFound, model.ErrNoSession.Error()
 	case errors.Is(err, model.ErrNoInviteCode):
@@ -42,6 +44,14 @@ func writeError(c *gin.Context, err error) {
 		status, message = http.StatusConflict, model.ErrSessionDone.Error()
 	case errors.Is(err, model.ErrSessionUndone):
 		status, message = http.StatusConflict, model.ErrSessionUndone.Error()
+	case errors.Is(err, model.ErrSessionStarted):
+		status, message = http.StatusConflict, model.ErrSessionStarted.Error()
+	case errors.Is(err, model.ErrSessionNotStarted):
+		status, message = http.StatusConflict, model.ErrSessionNotStarted.Error()
+	case errors.Is(err, model.ErrSessionFull):
+		status, message = http.StatusConflict, model.ErrSessionFull.Error()
+	case errors.Is(err, model.ErrTooFewPlayers):
+		status, message = http.StatusConflict, model.ErrTooFewPlayers.Error()
 	default:
 		log.Printf("internal error: %s %s: %v", c.Request.Method, c.Request.URL.Path, err)
 	}

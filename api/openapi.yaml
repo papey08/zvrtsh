@@ -4,21 +4,28 @@ info:
   title: Zvrtsh API
   version: 1.0.0
   description: |
-    HTTP API of the "Zvrtsh" game for two players.
+    HTTP API of the "Zvrtsh" game for 2 to 8 players.
 
-    Every player writes a question on a sheet of paper, folds it so only the
-    first part ("open question") is visible, and hands the sheet to the opponent,
-    who answers the open part blindly. The game goes on for a fixed number of
-    steps, after which both sheets are unfolded.
+    Every player has a sheet of paper. A player writes a question on a sheet,
+    folds it so only the first part ("open question") is visible, and the
+    sheet goes to another player, who answers the open part blindly. The game
+    goes on for a fixed number of steps, after which all sheets are unfolded.
+
+    A session starts in the lobby: the host creates it with an invite
+    (`POST /invites`), the others join by the code (`POST /sessions`), and the
+    host starts it (`POST /sessions/{session_id}/start`) whenever they want.
 
     At every step `i` each player does two things:
 
-    1. writes their own question for step `i` (`POST .../question`);
-    2. answers the open part of the opponent's question for step `i`
-       (`GET .../opponent-question`, then `POST .../answer`).
+    1. writes a question for step `i` on the sheet they hold (`POST .../question`);
+    2. answers the open part of the question for step `i` on another sheet
+       (`GET .../question-to-answer`, then `POST .../answer`).
 
-    Step `i + 1` of a sheet becomes available only after step `i` of this sheet
-    has been answered.
+    When all players have written the questions of a step, the sheets are
+    shuffled at random, and nobody gets their own sheet: with two players it
+    means the sheets are swapped. After the answer the sheet stays with the
+    player, who writes the question of step `i + 1` on it. The deal is drawn
+    when the session starts and stays secret.
 
 servers:
   - url: /zvrtsh/api/v1
@@ -89,12 +96,12 @@ paths:
     post:
       tags: [invites]
       operationId: createInvite
-      summary: Create a one-time invite code
+      summary: Create a session in the lobby with an invite code
       description: |
-        Creates an invite code that another user can use to start a session with
-        the caller. The caller chooses the number of steps of the session. An
-        invite is valid for a limited time and can be used once. A new invite
-        replaces the previous one of the same user.
+        Creates a session in the `lobby` status with the caller as its host and
+        an invite code, by which up to 7 more players can join it. The caller
+        chooses the number of steps. The code is valid for a limited time. A new
+        invite cancels the session the caller is still waiting in as the host.
       security:
         - bearerAuth: []
       requestBody:
@@ -119,8 +126,10 @@ paths:
     delete:
       tags: [invites]
       operationId: deleteInvite
-      summary: Cancel the active invite of the caller
-      description: Does nothing if the caller has no active invite.
+      summary: Cancel the session the caller waits in as the host
+      description: |
+        Deletes the session in the lobby created by the caller, the joined
+        players get `session_deleted`. Does nothing if there is no such session.
       security:
         - bearerAuth: []
       responses:
@@ -155,10 +164,10 @@ paths:
     post:
       tags: [sessions]
       operationId: createSession
-      summary: Start a session with the owner of an invite code
+      summary: Join a session in the lobby by its invite code
       description: |
-        The caller and the owner of the invite become the two players, the
-        number of steps is taken from the invite. The invite code is consumed.
+        Adds the caller to the players of the session. Joining a session the
+        caller already plays in returns it as is.
       security:
         - bearerAuth: []
       requestBody:
@@ -180,6 +189,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           description: Invite code does not exist or has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The session has already started or has no free places
           content:
             application/json:
               schema:
@@ -206,6 +221,8 @@ paths:
            `EventsServerMessage` of type `session_updated` with the whole session
            as the caller sees it. Snapshots of a session have a growing `version`,
            an older one than already known can be ignored.
+        4. When the host cancels a session in the lobby, the server sends
+           `EventsServerMessage` of type `session_deleted` with its `session_id`.
 
         The client sends nothing after the authentication. The server pings the
         client every 25 seconds. Close codes:
@@ -244,6 +261,44 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /sessions/{session_id}/start:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [sessions]
+      operationId: startSession
+      summary: Start the session with the players who have joined it
+      description: |
+        Only the host can start the session, at any moment when at least two
+        players are in it. The invite code stops working.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The started session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The caller is not the host of this session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/SessionNotFound'
+        '409':
+          description: The session has already started or has a single player
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /sessions/{session_id}/steps/{step_index}/question:
     parameters:
       - $ref: '#/components/parameters/SessionId'
@@ -251,7 +306,7 @@ paths:
     post:
       tags: [sessions]
       operationId: makeQuestion
-      summary: Write the caller's question for the step
+      summary: Write the caller's question for the step on the sheet they hold
       security:
         - bearerAuth: []
       requestBody:
@@ -276,14 +331,14 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /sessions/{session_id}/steps/{step_index}/opponent-question:
+  /sessions/{session_id}/steps/{step_index}/question-to-answer:
     parameters:
       - $ref: '#/components/parameters/SessionId'
       - $ref: '#/components/parameters/StepIndex'
     get:
       tags: [sessions]
-      operationId: getOpponentQuestion
-      summary: Get the open part of the opponent's question the caller has to answer
+      operationId: getQuestionToAnswer
+      summary: Get the open part of the question the caller has to answer on the step
       security:
         - bearerAuth: []
       responses:
@@ -313,7 +368,7 @@ paths:
     post:
       tags: [sessions]
       operationId: makeAnswer
-      summary: Answer the opponent's question for the step
+      summary: Answer the question for the step on the sheet the caller holds
       security:
         - bearerAuth: []
       requestBody:
@@ -346,11 +401,11 @@ paths:
       operationId: voteFinish
       summary: Offer or agree to finish the session after the current step
       description: |
-        When both players have voted, the session is shortened to the current
+        When all players have voted, the session is shortened to the current
         step: the players complete it and the sheets are unfolded. The current
-        step is the latest one either player has written anything on, or the
-        first unfinished one if that is later. Nothing written is lost and
-        nobody has to start a new question. The votes are reset after that.
+        step is the latest one anybody has written anything on, or the first
+        unfinished one if that is later. Nothing written is lost and nobody
+        has to start a new question. The votes are reset after that.
       security:
         - bearerAuth: []
       responses:
@@ -367,7 +422,7 @@ paths:
         '404':
           $ref: '#/components/responses/SessionNotFound'
         '409':
-          description: The session is already finished
+          description: The session is not started yet or already finished
           content:
             application/json:
               schema:
@@ -408,12 +463,12 @@ paths:
     get:
       tags: [sessions]
       operationId: getResults
-      summary: Get both unfolded sheets of a finished session
+      summary: Get all unfolded sheets of a finished session
       security:
         - bearerAuth: []
       responses:
         '200':
-          description: Both sheets
+          description: All sheets
           content:
             application/json:
               schema:
@@ -542,14 +597,17 @@ components:
         steps_amount:
           type: integer
           minimum: 1
-          maximum: 50
+          maximum: 10
 
     Invite:
       type: object
-      required: [invite_code, steps_amount, expires_at]
+      required: [invite_code, session_id, steps_amount, expires_at]
       properties:
         invite_code:
           type: string
+        session_id:
+          type: string
+          description: The session in the lobby the code leads to
         steps_amount:
           type: integer
         expires_at:
@@ -565,11 +623,11 @@ components:
 
     SessionStatus:
       type: string
-      enum: [in_work, done]
+      enum: [lobby, in_work, done]
 
     Session:
       type: object
-      required: [id, version, players, steps_amount, status, progress, my_finish_vote, opponent_finish_vote, updated_at]
+      required: [id, version, host, players, steps_amount, status, progress, finish_votes, updated_at]
       properties:
         id:
           type: string
@@ -577,28 +635,35 @@ components:
           type: integer
           format: int64
           description: Grows with every change of the session
+        host:
+          type: string
+          description: The player who has created the session, the first of `players`
         players:
           type: array
-          description: Names of the two players
-          minItems: 2
-          maxItems: 2
+          description: |
+            Names of the players in the order they have joined. The index of a
+            player is their sheet and their ink in the interface. `invite` is
+            present in the lobby only.
+          minItems: 1
+          maxItems: 8
           items:
             type: string
         steps_amount:
           type: integer
         status:
           $ref: '#/components/schemas/SessionStatus'
+        invite:
+          $ref: '#/components/schemas/Invite'
         progress:
           type: array
-          description: State of every step from the point of view of the caller
+          description: State of every step from the point of view of the caller, empty in the lobby
           items:
             $ref: '#/components/schemas/StepProgress'
-        my_finish_vote:
-          type: boolean
-          description: The caller offers to finish the session after the current step
-        opponent_finish_vote:
-          type: boolean
-          description: The opponent offers to finish the session after the current step
+        finish_votes:
+          type: array
+          description: Players who offer to finish the session after the current step
+          items:
+            type: string
         updated_at:
           type: string
           format: date-time
@@ -606,20 +671,29 @@ components:
 
     StepProgress:
       type: object
-      required: [my_question, my_answer, opponent_question, opponent_answer]
+      required: [my_question, my_answer, answer_sheet_from, answer_sheet_ready, questions_written, answers_written]
       properties:
         my_question:
           type: boolean
-          description: The caller has written their question for the step
+          description: |
+            The caller has written their question for the step. It is written
+            on the sheet the caller has answered the previous step on, so it is
+            available as soon as `my_answer` of the previous step.
         my_answer:
           type: boolean
-          description: The caller has answered the opponent's question of the step
-        opponent_question:
+          description: The caller has answered their question of the step
+        answer_sheet_ready:
           type: boolean
-          description: The opponent has written their question for the step
-        opponent_answer:
-          type: boolean
-          description: The opponent has answered the caller's question of the step
+          description: The questions of the step can be answered, everybody has written theirs and the sheets are shuffled
+        answer_sheet_from:
+          type: string
+          description: Who writes the question the caller has to answer
+        questions_written:
+          type: integer
+          description: How many players have written their question for the step
+        answers_written:
+          type: integer
+          description: How many players have answered on the step
 
     QuestionRequest:
       type: object
@@ -654,7 +728,7 @@ components:
 
     Step:
       type: object
-      required: [hidden_question, open_question, answer]
+      required: [hidden_question, open_question, answer, asker, answerer]
       properties:
         hidden_question:
           type: string
@@ -662,6 +736,12 @@ components:
           type: string
         answer:
           type: string
+        asker:
+          type: string
+          description: Who has written the question
+        answerer:
+          type: string
+          description: Who has answered it
 
     Sheet:
       type: object
@@ -669,7 +749,7 @@ components:
       properties:
         owner:
           type: string
-          description: Name of the player whose sheet it is
+          description: The player who has started the sheet with the question of the first step
         steps:
           type: array
           items:
@@ -683,8 +763,9 @@ components:
           type: string
         sheets:
           type: array
+          description: One sheet per player, in the order of `players`
           minItems: 2
-          maxItems: 2
+          maxItems: 8
           items:
             $ref: '#/components/schemas/Sheet'
 
@@ -706,6 +787,9 @@ components:
       properties:
         type:
           type: string
-          enum: [ready, session_updated]
+          enum: [ready, session_updated, session_deleted]
         session:
           $ref: '#/components/schemas/Session'
+        session_id:
+          type: string
+          description: The deleted session, for `session_deleted`

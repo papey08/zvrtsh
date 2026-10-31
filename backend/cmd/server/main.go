@@ -13,7 +13,6 @@ import (
 	"time"
 	"zvrtsh/internal/app"
 	"zvrtsh/internal/ports/httpserver"
-	inviterepo "zvrtsh/internal/repo/invite_repo"
 	"zvrtsh/internal/repo/postgres"
 	sessionrepo "zvrtsh/internal/repo/session_repo"
 	userrepo "zvrtsh/internal/repo/user_repo"
@@ -43,7 +42,7 @@ func main() {
 	a := app.New(ctx, app.Config{
 		InviteTTL:  viper.GetDuration("invite-ttl"),
 		SessionTTL: viper.GetDuration("session-ttl"),
-	}, userrepo.New(pool), inviterepo.New(pool), sessionrepo.New(pool))
+	}, userrepo.New(pool), sessionrepo.New(pool))
 
 	addr := net.JoinHostPort(viper.GetString("http-server.host"), strconv.Itoa(viper.GetInt("http-server.port")))
 	srv := httpserver.New(ctx, addr, a)

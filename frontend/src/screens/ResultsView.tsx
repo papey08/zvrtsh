@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, call, humanize, type Results, type Session } from "../api/client";
 import { Avatar, Spinner } from "../components/ui";
-import { copyText, inkOf as inkIn, opponentOf } from "../lib/game";
+import { copyText, inkOf as inkIn } from "../lib/game";
 import { links } from "../lib/router";
 import { useToast } from "../lib/toast";
 
@@ -35,19 +35,19 @@ export function ResultsView({ session, me }: { session: Session; me: string }) {
     return (
       <div className="reveal">
         <div className="reveal__stack" aria-hidden="true">
-          <div className="paper reveal__sheet reveal__sheet--a">
-            {Array.from({ length: Math.min(session.steps_amount * 2, 10) }, (_, i) => (
-              <span key={i} className="strip" style={{ ["--i" as string]: i }} />
-            ))}
-          </div>
-          <div className="paper reveal__sheet reveal__sheet--b">
-            {Array.from({ length: Math.min(session.steps_amount * 2, 10) }, (_, i) => (
-              <span key={i} className="strip" style={{ ["--i" as string]: i }} />
-            ))}
-          </div>
+          {["a", "b"].map((side) => (
+            <div key={side} className={`paper reveal__sheet reveal__sheet--${side}`}>
+              {Array.from({ length: Math.min(session.steps_amount * 2, 10) }, (_, i) => (
+                <span key={i} className="strip" style={{ ["--i" as string]: i }} />
+              ))}
+            </div>
+          ))}
         </div>
         <h2 className="reveal__title">Все листы загнуты до конца</h2>
-        <p className="page-subtitle">Самое время узнать, что вы с {opponentOf(session, me)} насочиняли.</p>
+        <p className="page-subtitle">
+          {results.sheets.length === 2 ? "Листов два" : `Листов ${results.sheets.length}`} — самое время узнать, что
+          вы насочиняли.
+        </p>
         <button className="btn btn--primary btn--huge" onClick={() => setUnfolded(true)}>
           Развернуть листы
         </button>
@@ -74,14 +74,7 @@ export function ResultsView({ session, me }: { session: Session; me: string }) {
       </div>
       <div className="results__sheets">
         {sheets.map((sheet, i) => (
-          <ResultSheet
-            key={sheet.owner}
-            sheet={sheet}
-            other={sheets[1 - i].owner}
-            me={me}
-            inkOf={inkOf}
-            delay={i * 0.25}
-          />
+          <ResultSheet key={sheet.owner} sheet={sheet} me={me} inkOf={inkOf} delay={Math.min(i, 3) * 0.25} />
         ))}
       </div>
       <div className="results__actions">
@@ -98,13 +91,12 @@ export function ResultsView({ session, me }: { session: Session; me: string }) {
 
 type ResultSheetProps = {
   sheet: Sheet;
-  other: string;
   me: string;
   inkOf(player: string): string;
   delay: number;
 };
 
-function ResultSheet({ sheet, other, me, inkOf, delay }: ResultSheetProps) {
+function ResultSheet({ sheet, me, inkOf, delay }: ResultSheetProps) {
   return (
     <article className="paper result-sheet">
       <header className="result-sheet__head">
@@ -113,9 +105,7 @@ function ResultSheet({ sheet, other, me, inkOf, delay }: ResultSheetProps) {
       </header>
       <ol className="result-sheet__steps">
         {sheet.steps.map((step, i) => {
-          // on even steps the owner asks and the other player answers, on odd steps vice versa
-          const asker = i % 2 === 0 ? sheet.owner : other;
-          const answerer = i % 2 === 0 ? other : sheet.owner;
+          const { asker, answerer } = step;
           return (
             <li
               key={i}

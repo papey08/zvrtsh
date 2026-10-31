@@ -36,15 +36,11 @@ func (h *handlers) CreateToken(ctx context.Context, request api.CreateTokenReque
 }
 
 func (h *handlers) CreateInvite(ctx context.Context, request api.CreateInviteRequestObject) (api.CreateInviteResponseObject, error) {
-	invite, err := h.app.CreateInvite(ctx, userName(ctx), request.Body.StepsAmount)
+	session, err := h.app.CreateInvite(ctx, userName(ctx), request.Body.StepsAmount)
 	if err != nil {
 		return nil, err
 	}
-	return api.CreateInvite201JSONResponse{
-		InviteCode:  invite.Code,
-		StepsAmount: invite.StepsAmount,
-		ExpiresAt:   invite.ExpiresAt,
-	}, nil
+	return api.CreateInvite201JSONResponse(toInvite(session)), nil
 }
 
 func (h *handlers) DeleteInvite(ctx context.Context, _ api.DeleteInviteRequestObject) (api.DeleteInviteResponseObject, error) {
@@ -55,11 +51,19 @@ func (h *handlers) DeleteInvite(ctx context.Context, _ api.DeleteInviteRequestOb
 }
 
 func (h *handlers) CreateSession(ctx context.Context, request api.CreateSessionRequestObject) (api.CreateSessionResponseObject, error) {
-	session, err := h.app.CreateSession(ctx, userName(ctx), request.Body.InviteCode)
+	session, err := h.app.JoinSession(ctx, userName(ctx), request.Body.InviteCode)
 	if err != nil {
 		return nil, err
 	}
 	return api.CreateSession201JSONResponse(toSession(session, userName(ctx))), nil
+}
+
+func (h *handlers) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
+	session, err := h.app.StartSession(ctx, request.SessionId, userName(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return api.StartSession200JSONResponse(toSession(session, userName(ctx))), nil
 }
 
 func (h *handlers) ListSessions(ctx context.Context, _ api.ListSessionsRequestObject) (api.ListSessionsResponseObject, error) {
@@ -91,12 +95,12 @@ func (h *handlers) MakeQuestion(ctx context.Context, request api.MakeQuestionReq
 	return api.MakeQuestion204Response{}, nil
 }
 
-func (h *handlers) GetOpponentQuestion(ctx context.Context, request api.GetOpponentQuestionRequestObject) (api.GetOpponentQuestionResponseObject, error) {
-	openQuestion, err := h.app.GetOpponentQuestion(ctx, request.SessionId, userName(ctx), request.StepIndex)
+func (h *handlers) GetQuestionToAnswer(ctx context.Context, request api.GetQuestionToAnswerRequestObject) (api.GetQuestionToAnswerResponseObject, error) {
+	openQuestion, err := h.app.GetQuestionToAnswer(ctx, request.SessionId, userName(ctx), request.StepIndex)
 	if err != nil {
 		return nil, err
 	}
-	return api.GetOpponentQuestion200JSONResponse{OpenQuestion: openQuestion}, nil
+	return api.GetQuestionToAnswer200JSONResponse{OpenQuestion: openQuestion}, nil
 }
 
 func (h *handlers) MakeAnswer(ctx context.Context, request api.MakeAnswerRequestObject) (api.MakeAnswerResponseObject, error) {
@@ -134,50 +138,80 @@ func (h *handlers) GetResults(ctx context.Context, request api.GetResultsRequest
 // toSession converts the session as it is seen by the given player.
 func toSession(s model.Session, userName string) api.Session {
 	status := api.InWork
-	if s.Status() == model.StatusDone {
+	switch s.Status() {
+	case model.StatusLobby:
+		status = api.Lobby
+	case model.StatusDone:
 		status = api.Done
 	}
 
+	names := s.PlayerNames()
 	me, _ := s.PlayerIdx(userName)
-	progress := make([]api.StepProgress, 0, len(s.Sheets[0].Steps))
+	progress := make([]api.StepProgress, 0, s.StepsAmount)
 	for _, p := range s.Progress(me) {
 		progress = append(progress, api.StepProgress{
 			MyQuestion:       p.MyQuestion,
 			MyAnswer:         p.MyAnswer,
-			OpponentQuestion: p.OpponentQuestion,
-			OpponentAnswer:   p.OpponentAnswer,
+			AnswerSheetReady: p.AnswerSheetReady,
+			AnswerSheetFrom:  names[p.AnswerSheetFrom],
+			QuestionsWritten: p.QuestionsWritten,
+			AnswersWritten:   p.AnswersWritten,
 		})
 	}
 
-	return api.Session{
+	votes := make([]string, 0, len(s.Players))
+	for _, p := range s.Players {
+		if p.FinishVote {
+			votes = append(votes, p.Name)
+		}
+	}
+
+	session := api.Session{
 		Id:          s.Id,
 		Version:     s.Version,
-		Players:     []string{s.Sheets[0].Owner, s.Sheets[1].Owner},
-		StepsAmount: len(s.Sheets[0].Steps),
+		Host:        s.Host(),
+		Players:     names,
+		StepsAmount: s.StepsAmount,
 		Status:      status,
 		Progress:    progress,
+		FinishVotes: votes,
+		UpdatedAt:   s.LastActive,
+	}
+	if s.Invite != nil {
+		invite := toInvite(s)
+		session.Invite = &invite
+	}
+	return session
+}
 
-		MyFinishVote:       s.FinishVotes[me],
-		OpponentFinishVote: s.FinishVotes[1-me],
-		UpdatedAt:          s.LastActive,
+// toInvite converts the invite of a session in the lobby.
+func toInvite(s model.Session) api.Invite {
+	return api.Invite{
+		InviteCode:  s.Invite.Code,
+		SessionId:   s.Id,
+		StepsAmount: s.StepsAmount,
+		ExpiresAt:   s.Invite.ExpiresAt,
 	}
 }
 
 func toResults(s model.Session) api.Results {
+	names := s.PlayerNames()
 	results := api.Results{
 		Id:     s.Id,
 		Sheets: make([]api.Sheet, 0, len(s.Sheets)),
 	}
-	for _, sheet := range s.Sheets {
+	for i, sheet := range s.Sheets {
 		steps := make([]api.Step, len(sheet.Steps))
-		for i, step := range sheet.Steps {
-			steps[i] = api.Step{
+		for j, step := range sheet.Steps {
+			steps[j] = api.Step{
 				HiddenQuestion: step.HiddenQuestion,
 				OpenQuestion:   step.OpenQuestion,
 				Answer:         step.Answer,
+				Asker:          names[step.Asker],
+				Answerer:       names[step.Answerer],
 			}
 		}
-		results.Sheets = append(results.Sheets, api.Sheet{Owner: sheet.Owner, Steps: steps})
+		results.Sheets = append(results.Sheets, api.Sheet{Owner: names[i], Steps: steps})
 	}
 	return results
 }

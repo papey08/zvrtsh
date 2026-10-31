@@ -34,6 +34,7 @@ func (e EventsAuthMessageType) Valid() bool {
 // Defines values for EventsServerMessageType.
 const (
 	Ready          EventsServerMessageType = "ready"
+	SessionDeleted EventsServerMessageType = "session_deleted"
 	SessionUpdated EventsServerMessageType = "session_updated"
 )
 
@@ -41,6 +42,8 @@ const (
 func (e EventsServerMessageType) Valid() bool {
 	switch e {
 	case Ready:
+		return true
+	case SessionDeleted:
 		return true
 	case SessionUpdated:
 		return true
@@ -53,6 +56,7 @@ func (e EventsServerMessageType) Valid() bool {
 const (
 	Done   SessionStatus = "done"
 	InWork SessionStatus = "in_work"
+	Lobby  SessionStatus = "lobby"
 )
 
 // Valid indicates whether the value is a known member of the SessionStatus enum.
@@ -61,6 +65,8 @@ func (e SessionStatus) Valid() bool {
 	case Done:
 		return true
 	case InWork:
+		return true
+	case Lobby:
 		return true
 	default:
 		return false
@@ -105,8 +111,11 @@ type EventsAuthMessageType string
 
 // EventsServerMessage A message from the server to `/events`
 type EventsServerMessage struct {
-	Session *Session                `json:"session,omitempty"`
-	Type    EventsServerMessageType `json:"type"`
+	Session *Session `json:"session,omitempty"`
+
+	// SessionId The deleted session, for `session_deleted`
+	SessionId *string                 `json:"session_id,omitempty"`
+	Type      EventsServerMessageType `json:"type"`
 }
 
 // EventsServerMessageType defines model for EventsServerMessage.Type.
@@ -114,9 +123,12 @@ type EventsServerMessageType string
 
 // Invite defines model for Invite.
 type Invite struct {
-	ExpiresAt   time.Time `json:"expires_at"`
-	InviteCode  string    `json:"invite_code"`
-	StepsAmount int       `json:"steps_amount"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	InviteCode string    `json:"invite_code"`
+
+	// SessionId The session in the lobby the code leads to
+	SessionId   string `json:"session_id"`
+	StepsAmount int    `json:"steps_amount"`
 }
 
 // OpenQuestion defines model for OpenQuestion.
@@ -135,24 +147,28 @@ type QuestionRequest struct {
 
 // Results defines model for Results.
 type Results struct {
-	Id     string  `json:"id"`
+	Id string `json:"id"`
+
+	// Sheets One sheet per player, in the order of `players`
 	Sheets []Sheet `json:"sheets"`
 }
 
 // Session defines model for Session.
 type Session struct {
-	Id string `json:"id"`
+	// FinishVotes Players who offer to finish the session after the current step
+	FinishVotes []string `json:"finish_votes"`
 
-	// MyFinishVote The caller offers to finish the session after the current step
-	MyFinishVote bool `json:"my_finish_vote"`
+	// Host The player who has created the session, the first of `players`
+	Host   string  `json:"host"`
+	Id     string  `json:"id"`
+	Invite *Invite `json:"invite,omitempty"`
 
-	// OpponentFinishVote The opponent offers to finish the session after the current step
-	OpponentFinishVote bool `json:"opponent_finish_vote"`
-
-	// Players Names of the two players
+	// Players Names of the players in the order they have joined. The index of a
+	// player is their sheet and their ink in the interface. `invite` is
+	// present in the lobby only.
 	Players []string `json:"players"`
 
-	// Progress State of every step from the point of view of the caller
+	// Progress State of every step from the point of view of the caller, empty in the lobby
 	Progress    []StepProgress `json:"progress"`
 	Status      SessionStatus  `json:"status"`
 	StepsAmount int            `json:"steps_amount"`
@@ -169,31 +185,45 @@ type SessionStatus string
 
 // Sheet defines model for Sheet.
 type Sheet struct {
-	// Owner Name of the player whose sheet it is
+	// Owner The player who has started the sheet with the question of the first step
 	Owner string `json:"owner"`
 	Steps []Step `json:"steps"`
 }
 
 // Step defines model for Step.
 type Step struct {
-	Answer         string `json:"answer"`
+	Answer string `json:"answer"`
+
+	// Answerer Who has answered it
+	Answerer string `json:"answerer"`
+
+	// Asker Who has written the question
+	Asker          string `json:"asker"`
 	HiddenQuestion string `json:"hidden_question"`
 	OpenQuestion   string `json:"open_question"`
 }
 
 // StepProgress defines model for StepProgress.
 type StepProgress struct {
-	// MyAnswer The caller has answered the opponent's question of the step
+	// AnswerSheetFrom Who writes the question the caller has to answer
+	AnswerSheetFrom string `json:"answer_sheet_from"`
+
+	// AnswerSheetReady The questions of the step can be answered, everybody has written theirs and the sheets are shuffled
+	AnswerSheetReady bool `json:"answer_sheet_ready"`
+
+	// AnswersWritten How many players have answered on the step
+	AnswersWritten int `json:"answers_written"`
+
+	// MyAnswer The caller has answered their question of the step
 	MyAnswer bool `json:"my_answer"`
 
-	// MyQuestion The caller has written their question for the step
+	// MyQuestion The caller has written their question for the step. It is written
+	// on the sheet the caller has answered the previous step on, so it is
+	// available as soon as `my_answer` of the previous step.
 	MyQuestion bool `json:"my_question"`
 
-	// OpponentAnswer The opponent has answered the caller's question of the step
-	OpponentAnswer bool `json:"opponent_answer"`
-
-	// OpponentQuestion The opponent has written their question for the step
-	OpponentQuestion bool `json:"opponent_question"`
+	// QuestionsWritten How many players have written their question for the step
+	QuestionsWritten int `json:"questions_written"`
 }
 
 // Token defines model for Token.
@@ -253,16 +283,16 @@ type ServerInterface interface {
 	// CreateToken Exchange name and password for an access token
 	// (POST /auth/token)
 	CreateToken(c *gin.Context)
-	// DeleteInvite Cancel the active invite of the caller
+	// DeleteInvite Cancel the session the caller waits in as the host
 	// (DELETE /invites)
 	DeleteInvite(c *gin.Context)
-	// CreateInvite Create a one-time invite code
+	// CreateInvite Create a session in the lobby with an invite code
 	// (POST /invites)
 	CreateInvite(c *gin.Context)
 	// ListSessions List sessions of the caller
 	// (GET /sessions)
 	ListSessions(c *gin.Context)
-	// CreateSession Start a session with the owner of an invite code
+	// CreateSession Join a session in the lobby by its invite code
 	// (POST /sessions)
 	CreateSession(c *gin.Context)
 	// GetSession Get session info
@@ -274,18 +304,21 @@ type ServerInterface interface {
 	// VoteFinish Offer or agree to finish the session after the current step
 	// (PUT /sessions/{session_id}/finish-vote)
 	VoteFinish(c *gin.Context, sessionId SessionId)
-	// GetResults Get both unfolded sheets of a finished session
+	// GetResults Get all unfolded sheets of a finished session
 	// (GET /sessions/{session_id}/results)
 	GetResults(c *gin.Context, sessionId SessionId)
-	// MakeAnswer Answer the opponent's question for the step
+	// StartSession Start the session with the players who have joined it
+	// (POST /sessions/{session_id}/start)
+	StartSession(c *gin.Context, sessionId SessionId)
+	// MakeAnswer Answer the question for the step on the sheet the caller holds
 	// (POST /sessions/{session_id}/steps/{step_index}/answer)
 	MakeAnswer(c *gin.Context, sessionId SessionId, stepIndex StepIndex)
-	// GetOpponentQuestion Get the open part of the opponent's question the caller has to answer
-	// (GET /sessions/{session_id}/steps/{step_index}/opponent-question)
-	GetOpponentQuestion(c *gin.Context, sessionId SessionId, stepIndex StepIndex)
-	// MakeQuestion Write the caller's question for the step
+	// MakeQuestion Write the caller's question for the step on the sheet they hold
 	// (POST /sessions/{session_id}/steps/{step_index}/question)
 	MakeQuestion(c *gin.Context, sessionId SessionId, stepIndex StepIndex)
+	// GetQuestionToAnswer Get the open part of the question the caller has to answer on the step
+	// (GET /sessions/{session_id}/steps/{step_index}/question-to-answer)
+	GetQuestionToAnswer(c *gin.Context, sessionId SessionId, stepIndex StepIndex)
 	// RegisterUser Register a new user
 	// (POST /users)
 	RegisterUser(c *gin.Context)
@@ -465,6 +498,31 @@ func (siw *ServerInterfaceWrapper) GetResults(c *gin.Context) {
 	siw.Handler.GetResults(c, sessionId)
 }
 
+// StartSession operation middleware
+func (siw *ServerInterfaceWrapper) StartSession(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "session_id" -------------
+	var sessionId SessionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "session_id", c.Param("session_id"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter session_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StartSession(c, sessionId)
+}
+
 // MakeAnswer operation middleware
 func (siw *ServerInterfaceWrapper) MakeAnswer(c *gin.Context) {
 
@@ -499,40 +557,6 @@ func (siw *ServerInterfaceWrapper) MakeAnswer(c *gin.Context) {
 	siw.Handler.MakeAnswer(c, sessionId, stepIndex)
 }
 
-// GetOpponentQuestion operation middleware
-func (siw *ServerInterfaceWrapper) GetOpponentQuestion(c *gin.Context) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "session_id" -------------
-	var sessionId SessionId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "session_id", c.Param("session_id"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter session_id: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Path parameter "step_index" -------------
-	var stepIndex StepIndex
-
-	err = runtime.BindStyledParameterWithOptions("simple", "step_index", c.Param("step_index"), &stepIndex, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter step_index: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.GetOpponentQuestion(c, sessionId, stepIndex)
-}
-
 // MakeQuestion operation middleware
 func (siw *ServerInterfaceWrapper) MakeQuestion(c *gin.Context) {
 
@@ -565,6 +589,40 @@ func (siw *ServerInterfaceWrapper) MakeQuestion(c *gin.Context) {
 	}
 
 	siw.Handler.MakeQuestion(c, sessionId, stepIndex)
+}
+
+// GetQuestionToAnswer operation middleware
+func (siw *ServerInterfaceWrapper) GetQuestionToAnswer(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "session_id" -------------
+	var sessionId SessionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "session_id", c.Param("session_id"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter session_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "step_index" -------------
+	var stepIndex StepIndex
+
+	err = runtime.BindStyledParameterWithOptions("simple", "step_index", c.Param("step_index"), &stepIndex, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter step_index: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetQuestionToAnswer(c, sessionId, stepIndex)
 }
 
 // RegisterUser operation middleware
@@ -614,8 +672,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/sessions", wrapper.ListSessions)
 	router.POST(options.BaseURL+"/sessions", wrapper.CreateSession)
 	router.GET(options.BaseURL+"/sessions/:session_id", wrapper.GetSession)
+	router.POST(options.BaseURL+"/sessions/:session_id/start", wrapper.StartSession)
 	router.POST(options.BaseURL+"/sessions/:session_id/steps/:step_index/question", wrapper.MakeQuestion)
-	router.GET(options.BaseURL+"/sessions/:session_id/steps/:step_index/opponent-question", wrapper.GetOpponentQuestion)
+	router.GET(options.BaseURL+"/sessions/:session_id/steps/:step_index/question-to-answer", wrapper.GetQuestionToAnswer)
 	router.POST(options.BaseURL+"/sessions/:session_id/steps/:step_index/answer", wrapper.MakeAnswer)
 	router.DELETE(options.BaseURL+"/sessions/:session_id/finish-vote", wrapper.CancelFinishVote)
 	router.PUT(options.BaseURL+"/sessions/:session_id/finish-vote", wrapper.VoteFinish)
@@ -936,6 +995,20 @@ func (response CreateSession404JSONResponse) VisitCreateSessionResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession409JSONResponse Error
+
+func (response CreateSession409JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1320,6 +1393,101 @@ func (response GetResults500JSONResponse) VisitGetResultsResponse(w http.Respons
 	return err
 }
 
+type StartSessionRequestObject struct {
+	SessionId SessionId `json:"session_id"`
+}
+
+type StartSessionResponseObject interface {
+	VisitStartSessionResponse(w http.ResponseWriter) error
+}
+
+type StartSession200JSONResponse Session
+
+func (response StartSession200JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSession401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response StartSession401JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.WWWAuthenticate != nil {
+		w.Header().Set("WWW-Authenticate", fmt.Sprint(*response.Headers.WWWAuthenticate))
+	}
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSession403JSONResponse Error
+
+func (response StartSession403JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSession404JSONResponse struct{ SessionNotFoundJSONResponse }
+
+func (response StartSession404JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSession409JSONResponse Error
+
+func (response StartSession409JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response StartSession500JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type MakeAnswerRequestObject struct {
 	SessionId SessionId `json:"session_id"`
 	StepIndex StepIndex `json:"step_index"`
@@ -1414,116 +1582,6 @@ func (response MakeAnswer409JSONResponse) VisitMakeAnswerResponse(w http.Respons
 type MakeAnswer500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response MakeAnswer500JSONResponse) VisitMakeAnswerResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestionRequestObject struct {
-	SessionId SessionId `json:"session_id"`
-	StepIndex StepIndex `json:"step_index"`
-}
-
-type GetOpponentQuestionResponseObject interface {
-	VisitGetOpponentQuestionResponse(w http.ResponseWriter) error
-}
-
-type GetOpponentQuestion200JSONResponse OpenQuestion
-
-func (response GetOpponentQuestion200JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response GetOpponentQuestion400JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response GetOpponentQuestion401JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if response.Headers.WWWAuthenticate != nil {
-		w.Header().Set("WWW-Authenticate", fmt.Sprint(*response.Headers.WWWAuthenticate))
-	}
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion403JSONResponse struct{ ForbiddenJSONResponse }
-
-func (response GetOpponentQuestion403JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion404JSONResponse struct{ SessionNotFoundJSONResponse }
-
-func (response GetOpponentQuestion404JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion409JSONResponse struct{ StepUnavailableJSONResponse }
-
-func (response GetOpponentQuestion409JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetOpponentQuestion500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response GetOpponentQuestion500JSONResponse) VisitGetOpponentQuestionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -1640,6 +1698,116 @@ func (response MakeQuestion500JSONResponse) VisitMakeQuestionResponse(w http.Res
 	return err
 }
 
+type GetQuestionToAnswerRequestObject struct {
+	SessionId SessionId `json:"session_id"`
+	StepIndex StepIndex `json:"step_index"`
+}
+
+type GetQuestionToAnswerResponseObject interface {
+	VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error
+}
+
+type GetQuestionToAnswer200JSONResponse OpenQuestion
+
+func (response GetQuestionToAnswer200JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetQuestionToAnswer400JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetQuestionToAnswer401JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.WWWAuthenticate != nil {
+		w.Header().Set("WWW-Authenticate", fmt.Sprint(*response.Headers.WWWAuthenticate))
+	}
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetQuestionToAnswer403JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer404JSONResponse struct{ SessionNotFoundJSONResponse }
+
+func (response GetQuestionToAnswer404JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer409JSONResponse struct{ StepUnavailableJSONResponse }
+
+func (response GetQuestionToAnswer409JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionToAnswer500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetQuestionToAnswer500JSONResponse) VisitGetQuestionToAnswerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RegisterUserRequestObject struct {
 	Body *RegisterUserJSONRequestBody
 }
@@ -1709,16 +1877,16 @@ type StrictServerInterface interface {
 	// CreateToken Exchange name and password for an access token
 	// (POST /auth/token)
 	CreateToken(ctx context.Context, request CreateTokenRequestObject) (CreateTokenResponseObject, error)
-	// DeleteInvite Cancel the active invite of the caller
+	// DeleteInvite Cancel the session the caller waits in as the host
 	// (DELETE /invites)
 	DeleteInvite(ctx context.Context, request DeleteInviteRequestObject) (DeleteInviteResponseObject, error)
-	// CreateInvite Create a one-time invite code
+	// CreateInvite Create a session in the lobby with an invite code
 	// (POST /invites)
 	CreateInvite(ctx context.Context, request CreateInviteRequestObject) (CreateInviteResponseObject, error)
 	// ListSessions List sessions of the caller
 	// (GET /sessions)
 	ListSessions(ctx context.Context, request ListSessionsRequestObject) (ListSessionsResponseObject, error)
-	// CreateSession Start a session with the owner of an invite code
+	// CreateSession Join a session in the lobby by its invite code
 	// (POST /sessions)
 	CreateSession(ctx context.Context, request CreateSessionRequestObject) (CreateSessionResponseObject, error)
 	// GetSession Get session info
@@ -1730,18 +1898,21 @@ type StrictServerInterface interface {
 	// VoteFinish Offer or agree to finish the session after the current step
 	// (PUT /sessions/{session_id}/finish-vote)
 	VoteFinish(ctx context.Context, request VoteFinishRequestObject) (VoteFinishResponseObject, error)
-	// GetResults Get both unfolded sheets of a finished session
+	// GetResults Get all unfolded sheets of a finished session
 	// (GET /sessions/{session_id}/results)
 	GetResults(ctx context.Context, request GetResultsRequestObject) (GetResultsResponseObject, error)
-	// MakeAnswer Answer the opponent's question for the step
+	// StartSession Start the session with the players who have joined it
+	// (POST /sessions/{session_id}/start)
+	StartSession(ctx context.Context, request StartSessionRequestObject) (StartSessionResponseObject, error)
+	// MakeAnswer Answer the question for the step on the sheet the caller holds
 	// (POST /sessions/{session_id}/steps/{step_index}/answer)
 	MakeAnswer(ctx context.Context, request MakeAnswerRequestObject) (MakeAnswerResponseObject, error)
-	// GetOpponentQuestion Get the open part of the opponent's question the caller has to answer
-	// (GET /sessions/{session_id}/steps/{step_index}/opponent-question)
-	GetOpponentQuestion(ctx context.Context, request GetOpponentQuestionRequestObject) (GetOpponentQuestionResponseObject, error)
-	// MakeQuestion Write the caller's question for the step
+	// MakeQuestion Write the caller's question for the step on the sheet they hold
 	// (POST /sessions/{session_id}/steps/{step_index}/question)
 	MakeQuestion(ctx context.Context, request MakeQuestionRequestObject) (MakeQuestionResponseObject, error)
+	// GetQuestionToAnswer Get the open part of the question the caller has to answer on the step
+	// (GET /sessions/{session_id}/steps/{step_index}/question-to-answer)
+	GetQuestionToAnswer(ctx context.Context, request GetQuestionToAnswerRequestObject) (GetQuestionToAnswerResponseObject, error)
 	// RegisterUser Register a new user
 	// (POST /users)
 	RegisterUser(ctx context.Context, request RegisterUserRequestObject) (RegisterUserResponseObject, error)
@@ -2082,6 +2253,32 @@ func (sh *strictHandler) GetResults(ctx *gin.Context, sessionId SessionId) {
 	}
 }
 
+// StartSession operation middleware
+func (sh *strictHandler) StartSession(ctx *gin.Context, sessionId SessionId) {
+	var request StartSessionRequestObject
+
+	request.SessionId = sessionId
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StartSession(ctx, request.(StartSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartSession")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(StartSessionResponseObject); ok {
+		if err := validResponse.VisitStartSessionResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // MakeAnswer operation middleware
 func (sh *strictHandler) MakeAnswer(ctx *gin.Context, sessionId SessionId, stepIndex StepIndex) {
 	var request MakeAnswerRequestObject
@@ -2127,33 +2324,6 @@ func (sh *strictHandler) MakeAnswer(ctx *gin.Context, sessionId SessionId, stepI
 	}
 }
 
-// GetOpponentQuestion operation middleware
-func (sh *strictHandler) GetOpponentQuestion(ctx *gin.Context, sessionId SessionId, stepIndex StepIndex) {
-	var request GetOpponentQuestionRequestObject
-
-	request.SessionId = sessionId
-	request.StepIndex = stepIndex
-
-	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.GetOpponentQuestion(ctx, request.(GetOpponentQuestionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetOpponentQuestion")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		sh.options.HandlerErrorFunc(ctx, err)
-	} else if validResponse, ok := response.(GetOpponentQuestionResponseObject); ok {
-		if err := validResponse.VisitGetOpponentQuestionResponse(ctx.Writer); err != nil {
-			sh.options.ResponseErrorHandlerFunc(ctx, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
 // MakeQuestion operation middleware
 func (sh *strictHandler) MakeQuestion(ctx *gin.Context, sessionId SessionId, stepIndex StepIndex) {
 	var request MakeQuestionRequestObject
@@ -2192,6 +2362,33 @@ func (sh *strictHandler) MakeQuestion(ctx *gin.Context, sessionId SessionId, ste
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(MakeQuestionResponseObject); ok {
 		if err := validResponse.VisitMakeQuestionResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetQuestionToAnswer operation middleware
+func (sh *strictHandler) GetQuestionToAnswer(ctx *gin.Context, sessionId SessionId, stepIndex StepIndex) {
+	var request GetQuestionToAnswerRequestObject
+
+	request.SessionId = sessionId
+	request.StepIndex = stepIndex
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetQuestionToAnswer(ctx, request.(GetQuestionToAnswerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetQuestionToAnswer")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetQuestionToAnswerResponseObject); ok {
+		if err := validResponse.VisitGetQuestionToAnswerResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

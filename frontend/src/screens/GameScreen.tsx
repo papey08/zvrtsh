@@ -9,18 +9,19 @@ import {
 } from "react";
 import { api, ApiError, call, humanize, type Session } from "../api/client";
 import { ResultsView } from "./ResultsView";
+import { InviteCode, inviteLink, Roster, useCopy } from "../components/Lobby";
 import { Timeline } from "../components/Timeline";
-import { Avatar, FoldedStrips, Scribble, Spinner } from "../components/ui";
+import { Avatars, FoldedStrips, Scribble, Spinner } from "../components/ui";
 import { useMe } from "../lib/auth";
 import {
   MAX_TEXT,
+  allDoneActions,
+  canFinishEarly,
   currentStepOf,
   inkOf,
+  joinNames,
   QUESTION_WORDS,
   myDoneActions,
-  opponentActivity,
-  opponentDoneActions,
-  opponentOf,
   plural,
   randomAnswer,
   sleep,
@@ -29,7 +30,7 @@ import {
   type Stage,
 } from "../lib/game";
 import { newer, useConnection, useSessionEvents } from "../lib/events";
-import { links } from "../lib/router";
+import { links, navigate } from "../lib/router";
 import { useToast } from "../lib/toast";
 import { usePolling } from "../lib/usePolling";
 
@@ -56,9 +57,14 @@ export function GameScreen({ id }: { id: string }) {
   useEffect(() => {
     load().catch(() => {});
   }, [load, syncKey]);
-  useSessionEvents((next) => {
-    if (next.id === id) setSession((current) => newer(current, next));
-  });
+  useSessionEvents(
+    (next) => {
+      if (next.id === id) setSession((current) => newer(current, next));
+    },
+    (deleted) => {
+      if (deleted === id) setFatal("Создатель отменил эту партию");
+    },
+  );
 
   // the players have agreed to finish early: the session became shorter
   const toast = useToast();
@@ -74,6 +80,14 @@ export function GameScreen({ id }: { id: string }) {
   const stage = session ? stageOf(session) : null;
   // without the socket the game falls back to polling
   usePolling(load, 3000, status === "offline" && !fatal && stage?.kind !== "done");
+
+  // the host has started the session while the player waited in it
+  const sessionStatus = session?.status;
+  const previousStatus = useRef(sessionStatus);
+  useEffect(() => {
+    if (previousStatus.current === "lobby" && sessionStatus === "in_work") toast("Партия началась!", "success");
+    previousStatus.current = sessionStatus;
+  }, [sessionStatus, toast]);
 
   if (fatal) {
     return (
@@ -95,9 +109,10 @@ export function GameScreen({ id }: { id: string }) {
     );
   }
 
-  const opponent = opponentOf(session, me);
   // on the last step there is nothing to cut
-  const canFinishEarly = stage.kind !== "done" && currentStepOf(session) + 1 < session.steps_amount;
+  const finishable = canFinishEarly(session);
+  const votes = session.finish_votes;
+  const onSession = (next: Session) => setSession((current) => newer(current, next));
 
   return (
     <div className="game">
@@ -106,14 +121,9 @@ export function GameScreen({ id }: { id: string }) {
           ← Лобби
         </a>
         <div className="game__players">
-          <span className="player">
-            <Avatar name={me} size={34} />
-            <span>Вы</span>
-          </span>
-          <span className="game__vs">×</span>
-          <span className="player">
-            <Avatar name={opponent} size={34} />
-            <span>{opponent}</span>
+          <Avatars names={session.players} size={34} max={5} />
+          <span>
+            {session.players.length} {plural(session.players.length, ["игрок", "игрока", "игроков"])}
           </span>
         </div>
         <span className="game__step">
@@ -121,15 +131,19 @@ export function GameScreen({ id }: { id: string }) {
             ? `Шаг ${stage.step + 1} из ${session.steps_amount}`
             : stage.kind === "done"
               ? "Партия окончена"
-              : "Почти всё"}
+              : stage.kind === "lobby"
+                ? "Сбор игроков"
+                : "Почти всё"}
         </span>
       </header>
 
-      {canFinishEarly && session.opponent_finish_vote && !session.my_finish_vote && (
-        <FinishOffer session={session} me={me} onSession={(next) => setSession((current) => newer(current, next))} />
+      {finishable && votes.length > 0 && !votes.includes(me) && (
+        <FinishOffer session={session} onSession={onSession} />
       )}
 
-      {stage.kind === "done" ? (
+      {stage.kind === "lobby" ? (
+        <WaitingRoom session={session} me={me} />
+      ) : stage.kind === "done" ? (
         <ResultsView session={session} me={me} />
       ) : (
         <div className="game__layout">
@@ -145,8 +159,8 @@ export function GameScreen({ id }: { id: string }) {
               <h3 className="aside-title">Подсказка</h3>
               <p>{tipFor(stage)}</p>
             </div>
-            {canFinishEarly && !session.opponent_finish_vote && (
-              <FinishCard session={session} me={me} onSession={(next) => setSession((current) => newer(current, next))} />
+            {finishable && (votes.length === 0 || votes.includes(me)) && (
+              <FinishCard session={session} me={me} onSession={onSession} />
             )}
           </aside>
         </div>
@@ -155,7 +169,62 @@ export function GameScreen({ id }: { id: string }) {
   );
 }
 
-type FinishProps = { session: Session; me: string; onSession(session: Session): void };
+/** The session in the lobby: who has joined, the invite and the start for the host. */
+function WaitingRoom({ session, me }: { session: Session; me: string }) {
+  const toast = useToast();
+  const copy = useCopy();
+  const [busy, setBusy] = useState(false);
+  const isHost = session.host === me;
+  const enough = session.players.length > 1;
+
+  async function act(request: () => Promise<unknown>, after: () => void) {
+    setBusy(true);
+    try {
+      await request();
+      after();
+    } catch (err) {
+      toast(humanize(err), "error");
+      setBusy(false);
+    }
+  }
+
+  const params = { params: { path: { session_id: session.id } } };
+  const start = () => act(() => call(api.POST("/sessions/{session_id}/start", params)), () => setBusy(false));
+  const cancel = () => act(() => call(api.DELETE("/invites")), () => navigate(links.lobby));
+
+  return (
+    <div className="card waiting-room">
+      <h2 className="page-title waiting-room__title">Собираем компанию</h2>
+      <p className="page-subtitle">
+        {isHost
+          ? "Отправьте код или ссылку друзьям. Начните, когда все соберутся — до 8 игроков."
+          : `Ждём, когда ${session.host} начнёт партию. Можно позвать ещё друзей по коду.`}
+      </p>
+      <Roster session={session} me={me} />
+      {session.invite && <InviteCode invite={session.invite} />}
+      <div className="waiting-room__actions">
+        {isHost && (
+          <button className="btn btn--primary" onClick={start} disabled={busy || !enough}>
+            Начать партию
+          </button>
+        )}
+        {session.invite && (
+          <button className="btn btn--ghost" onClick={() => copy(inviteLink(session.invite!.invite_code), "Ссылка скопирована")}>
+            Скопировать ссылку
+          </button>
+        )}
+        {isHost && (
+          <button className="btn btn--ghost" onClick={cancel} disabled={busy}>
+            Отменить партию
+          </button>
+        )}
+      </div>
+      {isHost && !enough && <p className="action-card__hint">Начать можно, когда присоединится хотя бы один игрок.</p>}
+    </div>
+  );
+}
+
+type FinishProps = { session: Session; onSession(session: Session): void };
 
 /** Sends the player's vote to finish the session after the current step. */
 function useFinishVote(session: Session, onSession: (session: Session) => void) {
@@ -180,18 +249,20 @@ function useFinishVote(session: Session, onSession: (session: Session) => void) 
 }
 
 /** The player's own offer to finish early, in the side column. */
-function FinishCard({ session, me, onSession }: FinishProps) {
+function FinishCard({ session, me, onSession }: FinishProps & { me: string }) {
   const { busy, setVote } = useFinishVote(session, onSession);
-  const opponent = opponentOf(session, me);
   const step = currentStepOf(session) + 1;
+  const n = session.players.length;
+  const agreed = session.finish_votes.length;
 
   return (
     <div className="card card--compact finish-card">
       <h3 className="aside-title">Надоело?</h3>
-      {session.my_finish_vote ? (
+      {session.finish_votes.includes(me) ? (
         <>
           <p>
-            Вы предложили закончить после шага {step}. Ждём, согласится ли <b>{opponent}</b>.
+            Вы предложили закончить после шага {step}.{" "}
+            {n === 2 ? "Ждём, согласится ли второй игрок." : `Согласны ${agreed} из ${n} — нужны все.`}
           </p>
           <button className="btn btn--ghost btn--small" onClick={() => setVote(false)} disabled={busy}>
             Передумать
@@ -199,7 +270,9 @@ function FinishCard({ session, me, onSession }: FinishProps) {
         </>
       ) : (
         <>
-          <p>Если вы оба согласитесь, доиграете шаг {step} и сразу развернёте листы.</p>
+          <p>
+            Если {n === 2 ? "вы оба согласитесь" : "согласятся все"}, доиграете шаг {step} и сразу развернёте листы.
+          </p>
           <button className="btn btn--ghost btn--small" onClick={() => setVote(true)} disabled={busy}>
             Предложить закончить
           </button>
@@ -210,14 +283,17 @@ function FinishCard({ session, me, onSession }: FinishProps) {
 }
 
 /** The opponent's offer to finish early, shown above the sheet so it is not missed. */
-function FinishOffer({ session, me, onSession }: FinishProps) {
+function FinishOffer({ session, onSession }: FinishProps) {
   const { busy, setVote } = useFinishVote(session, onSession);
   const step = currentStepOf(session) + 1;
+  const votes = session.finish_votes;
 
   return (
     <div className="finish-offer">
       <span className="finish-offer__text">
-        <b>{opponentOf(session, me)}</b> предлагает закончить после шага {step} и развернуть листы
+        <b>{joinNames(votes)}</b> {votes.length === 1 ? "предлагает" : "предлагают"} закончить после шага {step} и
+        развернуть листы
+        {session.players.length > 2 && ` · согласны ${votes.length} из ${session.players.length}`}
       </span>
       <button className="btn btn--primary btn--small" onClick={() => setVote(true)} disabled={busy}>
         Согласиться
@@ -233,44 +309,56 @@ function stageKey(stage: Stage): string {
 function tipFor(stage: Stage): string {
   switch (stage.kind) {
     case "write":
-      return "Чем подробнее полный вопрос, тем смешнее финал. Соперник увидит только короткое начало.";
+      return "Чем подробнее полный вопрос, тем смешнее финал. Отвечающий увидит только короткое начало.";
     case "answer":
       return "Не пытайтесь угадать — отвечайте первое, что придёт в голову. Абсурд приветствуется.";
-    case "wait-question":
-      return "Пока соперник пишет, придумайте следующий вопрос. Страница обновится сама.";
+    case "wait-questions":
+      return "Листы перемешаются, когда все допишут вопросы. Страница обновится сама.";
     default:
-      return "Листы развернутся, как только соперник закончит последний шаг.";
+      return "Листы развернутся, как только все закончат последний шаг.";
   }
 }
 
 type PanelProps = { session: Session; stage: Stage; me: string; onChanged(): Promise<void> };
 
 function StagePanel(props: PanelProps) {
-  const { session, stage, me } = props;
-  const opponent = opponentOf(session, me);
+  const { session, stage } = props;
   const folded = myDoneActions(session);
+  const n = session.players.length;
 
   switch (stage.kind) {
     case "write":
       return <WritePanel {...props} step={stage.step} folded={folded} />;
     case "answer":
       return <AnswerPanel {...props} step={stage.step} folded={folded} />;
-    case "wait-question":
+    case "wait-questions": {
+      const p = session.progress[stage.step];
+      // with two players the other one may still answer the previous step
+      const answering = stage.step > 0 && session.progress[stage.step - 1].answers_written < n;
       return (
         <div className="paper sheet sheet--waiting">
           <FoldedStrips count={folded} />
           <Scribble
             label={
-              <>
-                <b>{opponent}</b> {opponentActivity(session, stage.step)}
-              </>
+              n === 2 ? (
+                <>
+                  <b>{p.answer_sheet_from}</b> {answering ? "отвечает на ваш вопрос" : "сочиняет вопрос"}
+                </>
+              ) : (
+                <>
+                  Вопросы написали <b>{p.questions_written} из {n}</b>
+                </>
+              )
             }
           />
-          <p className="sheet__hint">Ваш вопрос загнут и передан. Ждём вопрос соперника для шага {stage.step + 1}.</p>
+          <p className="sheet__hint">
+            Ваш вопрос загнут. Листы перемешаются, когда все напишут вопросы шага {stage.step + 1}.
+          </p>
         </div>
       );
+    }
     default: {
-      const left = session.steps_amount * 2 - opponentDoneActions(session);
+      const left = session.steps_amount * 2 * n - allDoneActions(session);
       return (
         <div className="paper sheet sheet--waiting">
           <FoldedStrips count={folded} />
@@ -278,7 +366,7 @@ function StagePanel(props: PanelProps) {
           <Scribble
             label={
               <>
-                <b>{opponent}</b> дописывает — осталось {left} {plural(left, ["действие", "действия", "действий"])}
+                Остальные дописывают — осталось {left} {plural(left, ["действие", "действия", "действий"])}
               </>
             }
           />
@@ -374,7 +462,7 @@ function WritePanel({ session, step, folded, me, onChanged }: StepProps) {
         </div>
       </div>
 
-      <p className="sheet__label">Соперник увидит только это</p>
+      <p className="sheet__label">Отвечающий увидит только это</p>
       <input
         className={`paper-input paper-input--open ${inkOf(session, me)}`}
         value={open}
@@ -414,7 +502,7 @@ function WritePanel({ session, step, folded, me, onChanged }: StepProps) {
 }
 
 function AnswerPanel({ session, step, folded, me, onChanged }: StepProps) {
-  const opponent = opponentOf(session, me);
+  const asker = session.progress[step].answer_sheet_from;
   const [question, setQuestion] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const [folding, setFolding] = useState(false);
@@ -423,7 +511,7 @@ function AnswerPanel({ session, step, folded, me, onChanged }: StepProps) {
   useEffect(() => {
     let cancelled = false;
     call(
-      api.GET("/sessions/{session_id}/steps/{step_index}/opponent-question", {
+      api.GET("/sessions/{session_id}/steps/{step_index}/question-to-answer", {
         params: { path: { session_id: session.id, step_index: step } },
       }),
     )
@@ -464,9 +552,9 @@ function AnswerPanel({ session, step, folded, me, onChanged }: StepProps) {
     <form className={`paper sheet${folding ? " is-folding" : ""}`} onSubmit={submit}>
       <FoldedStrips count={folded} />
       <p className="sheet__label">
-        <span className="sheet__num">{step + 1}</span> {opponent} спрашивает
+        <span className="sheet__num">{step + 1}</span> {asker} спрашивает
       </p>
-      <div className={`open-strip ${inkOf(session, opponent)}`}>{question === null && !error ? <Spinner /> : <span>{question}</span>}</div>
+      <div className={`open-strip ${inkOf(session, asker)}`}>{question === null && !error ? <Spinner /> : <span>{question}</span>}</div>
 
       <div className="sheet__fold-area">
         <p className="sheet__label">Ваш ответ вслепую</p>
